@@ -1,0 +1,262 @@
+/* 全局样式 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas: 
+        "header header"
+        "nav main"
+        "footer footer";
+    gap: 20px;
+    min-height: 100vh;
+}
+
+/* 头部样式 */
+header {
+    grid-area: header;
+    background-color: #3498db;
+    color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.header-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+#current-time {
+    font-size: 14px;
+}
+
+#refresh-btn {
+    background-color: white;
+    color: #3498db;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+#refresh-btn:hover {
+    background-color: #f0f0f0;
+}
+
+/* 导航样式 */
+nav {
+    grid-area: nav;
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+nav h2 {
+    font-size: 18px;
+    margin-bottom: 15px;
+    color: #3498db;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 10px;
+}
+
+#report-list {
+    list-style: none;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+#report-list li {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    border-left: 4px solid #e0e0e0;
+}
+
+#report-list li:hover {
+    background-color: #f0f0f0;
+}
+
+#report-list li.active {
+    background-color: #e3f2fd;
+    border-left-color: #3498db;
+    font-weight: bold;
+}
+
+/* 主内容样式 */
+main {
+    grid-area: main;
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    overflow-y: auto;
+}
+
+#report-content {
+    min-height: 400px;
+}
+
+.loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 400px;
+    color: #666;
+    font-size: 18px;
+}
+
+/* 报告样式 */
+.report-summary {
+    background-color: #f9f9f9;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    border-left: 4px solid #3498db;
+}
+
+.server {
+    margin-bottom: 20px;
+    padding: 15px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    transition: box-shadow 0.3s;
+}
+
+.server:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.server h3 {
+    color: #3498db;
+    margin-bottom: 10px;
+    font-size: 18px;
+}
+
+.server-info {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 15px;
+}
+
+.checks {
+    margin-top: 15px;
+}
+
+.check-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    border-left: 4px solid #ccc;
+}
+
+.check-item.normal {
+    border-left-color: #4CAF50;
+    background-color: #f9fff9;
+}
+
+.check-item.warn {
+    border-left-color: #ff9800;
+    background-color: #fff9f0;
+}
+
+.check-item.serious {
+    border-left-color: #f44336;
+    background-color: #fff0f0;
+}
+
+.check-item strong {
+    display: block;
+    margin-bottom: 5px;
+    color: #333;
+}
+
+.check-item .value {
+    font-size: 14px;
+    color: #666;
+}
+
+.check-item .status {
+    font-size: 12px;
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 10px;
+    display: inline-block;
+    margin-top: 5px;
+}
+
+.check-item.normal .status {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.check-item.warn .status {
+    background-color: #ff9800;
+    color: white;
+}
+
+.check-item.serious .status {
+    background-color: #f44336;
+    color: white;
+}
+
+/* 底部样式 */
+footer {
+    grid-area: footer;
+    background-color: #3498db;
+    color: white;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 14px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .container {
+        grid-template-columns: 1fr;
+        grid-template-areas: 
+            "header"
+            "nav"
+            "main"
+            "footer";
+    }
+    
+    nav {
+        order: 2;
+    }
+    
+    main {
+        order: 3;
+    }
+}
