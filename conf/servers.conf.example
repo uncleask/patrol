@@ -1,0 +1,18 @@
+# 服务器配置文件
+# 格式: 别名:IP:端口:用户:密钥:密码:组标签
+# 示例:
+# web1:192.168.1.10:22:root:/path/to/key:password123:web db
+# web2:192.168.1.11:22:root:/path/to/key:password123:web
+# db1:192.168.1.20:22:root:/path/to/key:password123:db
+
+# 本地环境服务器
+local-server:127.0.0.1:22:root:./patrol/.ssh/id_rsa:password:local web
+
+# 生产环境服务器
+prod-web1:192.168.1.100:22:root:./patrol/.ssh/id_rsa:password123:prod web
+prod-web2:192.168.1.101:22:root:./patrol/.ssh/id_rsa:password123:prod web
+prod-db1:192.168.1.110:22:root:./patrol/.ssh/id_rsa:password123:prod db
+
+# 测试环境服务器
+test-web1:192.168.2.100:22:root:./patrol/.ssh/id_rsa:password123:test web
+test-db1:192.168.2.110:22:root:./patrol/.ssh/id_rsa:password123:test db

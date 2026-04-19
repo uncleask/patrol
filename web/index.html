@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patrol 系统巡检报告</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Patrol 系统巡检报告</h1>
+            <div class="header-info">
+                <span id="current-time"></span>
+                <button id="refresh-btn">刷新</button>
+            </div>
+        </header>
+        
+        <nav>
+            <h2>报告历史</h2>
+            <ul id="report-list">
+                <li>加载中...</li>
+            </ul>
+        </nav>
+        
+        <main>
+            <div id="report-content">
+                <div class="loading">
+                    <p>请选择一个报告查看</p>
+                </div>
+            </div>
+        </main>
+        
+        <footer>
+            <p>&copy; 2026 Patrol 系统巡检工具</p>
+        </footer>
+    </div>
+    
+    <script src="js/main.js"></script>
+</body>
+</html>

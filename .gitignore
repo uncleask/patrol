@@ -1,0 +1,11 @@
+# Test files
+test_*.sh
+
+# SSH keys
+patrol/.ssh/
+
+# Log files
+logs/
+
+# Output reports
+output/
