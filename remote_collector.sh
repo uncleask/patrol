@@ -47,7 +47,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         THRESHOLDS+=("$name $warn $crit")
     fi
     
-done < "/tmp/$(basename "$CONFIG_FILE")"
+
+done < "$CONFIG_FILE"
 
 # 检查状态
 check_status() {
@@ -90,9 +91,13 @@ collect_memory() {
 
 # 采集磁盘信息
 collect_disk() {
-    # 执行 df -h 命令
-    local disk_info=$(df -h | grep '^/dev/')
-    echo "$disk_info"
+    # 执行 df -h 命令，获取根目录的使用率
+    local disk_usage=$(df -h | grep ' /$' | awk '{print $5}' | sed 's/%//')
+    if [[ -z "$disk_usage" ]]; then
+        # 如果没有匹配到，尝试其他方法
+        disk_usage=$(df -h | head -2 | tail -1 | awk '{print $5}' | sed 's/%//')
+    fi
+    echo "$disk_usage"
 }
 
 # 采集进程信息

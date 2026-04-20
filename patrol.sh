@@ -246,31 +246,54 @@ execute_remote_check() {
     local result_file="$TEMP_DIR/${alias}_result.json"
     local remote_config_file="/tmp/host_${ip}_patrol.conf"
     
-    # 复制远程脚本和配置文件到目标服务器（使用指定的密钥文件）
-    scp -i "$key" -P "$port" "$REMOTE_SCRIPT" "$config_file" "$user@$ip:/tmp/" > /dev/null 2>&1
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}错误: 无法复制文件到服务器 $alias ($ip)${NC}"
-        echo "错误: 无法复制文件到服务器 $alias ($ip)" >> "$LOG_FILE"
-        return 1
+    # 检查是否是本地服务器
+    if [[ "$ip" == "127.0.0.1" ]]; then
+        # 本地服务器，直接执行
+        echo "INFO: 开始本地服务器检查: $alias" >> "$LOG_FILE"
+        
+        # 直接在本地执行 remote_collector.sh
+        bash "$REMOTE_SCRIPT" "$config_file" > "$result_file"
+        
+        if [[ $? -ne 0 ]]; then
+            echo -e "${RED}错误: 无法执行本地检查${NC}"
+            echo "错误: 无法执行本地检查" >> "$LOG_FILE"
+            return 1
+        fi
+        
+        if [[ "$VERBOSE" == true ]]; then
+            echo -e "${GREEN}完成: 本地服务器 $alias 检查${NC}"
+        fi
+        echo "INFO: 完成本地服务器 $alias 检查" >> "$LOG_FILE"
+        
+        return 0
+    else
+        # 远程服务器，使用 SSH
+        # 复制远程脚本和配置文件到目标服务器（使用指定的密钥文件）
+        scp -i "$key" -P "$port" "$REMOTE_SCRIPT" "$config_file" "$user@$ip:/tmp/" > /dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            echo -e "${RED}错误: 无法复制文件到服务器 $alias ($ip)${NC}"
+            echo "错误: 无法复制文件到服务器 $alias ($ip)" >> "$LOG_FILE"
+            return 1
+        fi
+        
+        # 重命名配置文件（使用指定的密钥文件）
+        ssh -i "$key" -p "$port" "$user@$ip" "mv /tmp/$(basename "$config_file") $remote_config_file" > /dev/null 2>&1
+        
+        # 设置执行权限（使用指定的密钥文件）
+        ssh -i "$key" -p "$port" "$user@$ip" "chmod +x /tmp/remote_collector.sh" > /dev/null 2>&1
+        
+        # 执行远程检查（使用指定的密钥文件）
+        ssh -i "$key" -p "$port" "$user@$ip" "/tmp/remote_collector.sh $remote_config_file" > "$result_file" 2>&1
+        
+        if [[ $? -ne 0 ]]; then
+            echo -e "${RED}错误: 无法执行远程检查在服务器 $alias ($ip)${NC}"
+            echo "错误: 无法执行远程检查在服务器 $alias ($ip)" >> "$LOG_FILE"
+            return 1
+        fi
+        
+        # 清理远程文件（使用指定的密钥文件）
+        ssh -i "$key" -p "$port" "$user@$ip" "rm -f /tmp/remote_collector.sh $remote_config_file" > /dev/null 2>&1
     fi
-    
-    # 重命名配置文件（使用指定的密钥文件）
-    ssh -i "$key" -p "$port" "$user@$ip" "mv /tmp/$(basename "$config_file") $remote_config_file" > /dev/null 2>&1
-    
-    # 设置执行权限（使用指定的密钥文件）
-    ssh -i "$key" -p "$port" "$user@$ip" "chmod +x /tmp/remote_collector.sh" > /dev/null 2>&1
-    
-    # 执行远程检查（使用指定的密钥文件）
-    ssh -i "$key" -p "$port" "$user@$ip" "/tmp/remote_collector.sh $remote_config_file" > "$result_file" 2>&1
-    
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}错误: 无法执行远程检查在服务器 $alias ($ip)${NC}"
-        echo "错误: 无法执行远程检查在服务器 $alias ($ip)" >> "$LOG_FILE"
-        return 1
-    fi
-    
-    # 清理远程文件（使用指定的密钥文件）
-    ssh -i "$key" -p "$port" "$user@$ip" "rm -f /tmp/remote_collector.sh $remote_config_file" > /dev/null 2>&1
     
     if [[ "$VERBOSE" == true ]]; then
         echo -e "${GREEN}完成: 服务器 $alias ($ip) 检查${NC}"
