@@ -193,62 +193,15 @@ EOF
 # ========== 应用进程和容器采集 ==========
 
 collect_app_info() {
-    local config_file="$1"
-    local process_array=()
-    local docker_array=()
+    local checks_config="$1"
     
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        
-        if [[ "$line" =~ ^process: ]]; then
-            IFS=":" read -r type proc_name service_name <<< "$line"
-            
-            local ps_line=$(ps aux | grep -v grep | grep "$proc_name" | head -1)
-            if [[ -n "$ps_line" ]]; then
-                local pid=$(echo "$ps_line" | awk '{print $2}')
-                local cpu_pct=$(echo "$ps_line" | awk '{print $3}')
-                local mem_pct=$(echo "$ps_line" | awk '{print $4}')
-                local state=$(ps -p $pid -o state= 2>/dev/null || echo "unknown")
-                local etime=$(ps -p $pid -o etime= 2>/dev/null || echo "unknown")
-                local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
-                local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
-                
-                process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"pid\":$pid,\"state\":\"$(json_escape "$state")\",\"running_time\":\"$(json_escape "$etime")\",\"cpu_usage\":$cpu_pct,\"memory_usage\":$mem_pct,\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\",\"running\":true}")
-            else
-                process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
-            fi
-        elif [[ "$line" =~ ^docker: ]]; then
-            IFS=":" read -r type container_name service_name <<< "$line"
-            
-            if command -v docker &> /dev/null; then
-                local container_id=$(docker ps -a --filter "name=$container_name" --format "{{.ID}}" 2>/dev/null | head -1)
-                if [[ -n "$container_id" ]]; then
-                    local state=$(docker inspect "$container_id" --format "{{.State.Status}}" 2>/dev/null)
-                    local docker_stats=$(docker stats --no-stream "$container_id" --format "{{.CPUPerc}},{{.MemPerc}},{{.MemUsage}}" 2>/dev/null)
-                    local cpu_pct=$(echo "$docker_stats" | cut -d',' -f1 | sed 's/%//')
-                    local mem_pct=$(echo "$docker_stats" | cut -d',' -f2 | sed 's/%//')
-                    local mem_usage=$(echo "$docker_stats" | cut -d',' -f3)
-                    local size=$(docker inspect "$container_id" --format "{{.SizeRw}}" 2>/dev/null | numfmt --to=iec --suffix=B 2>/dev/null || echo "unknown")
-                    local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
-                    local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
-                    
-                    docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"container_id\":\"$(json_escape "$container_id")\",\"state\":\"$(json_escape "$state")\",\"cpu_usage\":${cpu_pct:-0},\"memory_usage\":${mem_pct:-0},\"memory_used\":\"$(json_escape "$mem_usage")\",\"disk_used\":\"$(json_escape "$size")\",\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\"}")
-                else
-                    docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
-                fi
-            else
-                docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"docker_unavailable\":true}")
-            fi
-        fi
-    done < "$config_file"
-    
-    local processes=$(IFS=, ; echo "${process_array[*]}")
-    local dockers=$(IFS=, ; echo "${docker_array[*]}")
+    local processes=$(collect_process_info "$checks_config")
+    local containers=$(collect_container_info "$checks_config")
     
     cat <<EOF
   "app_info": {
     "processes": [${processes:-}],
-    "docker_containers": [${dockers:-}]
+    "docker_containers": [${containers:-}]
   }
 EOF
 }
@@ -284,9 +237,7 @@ EOF
 # ========== 主函数 ==========
 
 main() {
-    local apps_config="$1"
-    local logs_config="$2"
-    local checks_config="$3"
+    local checks_config="$1"
     
     # 读取阈值配置
     read_thresholds "$checks_config"
@@ -311,7 +262,7 @@ main() {
     echo ","
     
     # 应用信息
-    collect_app_info "$apps_config"
+    collect_app_info "$checks_config"
     echo ","
     
     # 检查项信息
@@ -319,7 +270,7 @@ main() {
     echo ","
     
     # 日志信息
-    collect_log_info "$logs_config"
+    collect_log_info "$checks_config"
     
     echo "}"
 }
@@ -328,21 +279,37 @@ main() {
 collect_checks() {
     local config_file="$1"
     local -A CHECKS
+    local -A PROCESSES
+    local -A CONTAINERS
+    local -A LOGS
     
     # 读取检查项配置
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^# ]] && continue
         if [[ ! "$line" =~ ^threshold: ]]; then
-            IFS=":" read -r name type command <<< "$line"
-            CHECKS["$name"]="type=$type command=$command"
+            IFS=":" read -r type name rest <<< "$line"
+            if [[ "$type" == "process" || "$type" == "docker" || "$type" == "log" ]]; then
+                # 特殊类型处理
+                if [[ "$type" == "process" ]]; then
+                    PROCESSES["$name"]="$rest"
+                elif [[ "$type" == "docker" ]]; then
+                    CONTAINERS["$name"]="$rest"
+                elif [[ "$type" == "log" ]]; then
+                    LOGS["$name"]="$rest"
+                fi
+            else
+                # 普通检查项
+                CHECKS["$type"]="name=$name command=$rest"
+            fi
         fi
     done < "$config_file"
     
     local check_array=()
     
-    for check_name in "${!CHECKS[@]}"; do
-        local check_info="${CHECKS[$check_name]}"
-        local check_type=$(echo "$check_info" | awk '{print $1}' | cut -d'=' -f2)
+    # 处理普通检查项
+    for check_type in "${!CHECKS[@]}"; do
+        local check_info="${CHECKS[$check_type]}"
+        local check_name=$(echo "$check_info" | awk '{print $1}' | cut -d'=' -f2)
         local check_command=$(echo "$check_info" | awk '{$1=""; print substr($0,2)}' | cut -d'=' -f2-)
         
         local check_value=$(eval "$check_command" 2>/dev/null || echo "N/A")
@@ -367,11 +334,134 @@ collect_checks() {
 EOF
 }
 
+# 收集进程信息
+collect_process_info() {
+    local config_file="$1"
+    local -A PROCESSES
+    
+    # 从 checks.conf 中读取进程配置
+    while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        if [[ "$line" =~ ^process: ]]; then
+            IFS=":" read -r type proc_name service_name <<< "$line"
+            PROCESSES["$proc_name"]="$service_name"
+        fi
+    done < "$config_file"
+    
+    local process_array=()
+    
+    for proc_name in "${!PROCESSES[@]}"; do
+        local service_name="${PROCESSES[$proc_name]}"
+        local ps_line=$(ps aux | grep -v grep | grep "$proc_name" | head -1)
+        
+        if [[ -n "$ps_line" ]]; then
+            local pid=$(echo "$ps_line" | awk '{print $2}')
+            local cpu_pct=$(echo "$ps_line" | awk '{print $3}')
+            local mem_pct=$(echo "$ps_line" | awk '{print $4}')
+            local state=$(ps -p $pid -o state= 2>/dev/null || echo "unknown")
+            local etime=$(ps -p $pid -o etime= 2>/dev/null || echo "unknown")
+            local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
+            local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
+            
+            process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"pid\":$pid,\"state\":\"$(json_escape "$state")\",\"running_time\":\"$(json_escape "$etime")\",\"cpu_usage\":$cpu_pct,\"memory_usage\":$mem_pct,\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\",\"running\":true}")
+        else
+            process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
+        fi
+    done
+    
+    local processes=$(IFS=, ; echo "${process_array[*]}")
+    echo "$processes"
+}
+
+# 收集容器信息
+collect_container_info() {
+    local config_file="$1"
+    local -A CONTAINERS
+    
+    # 从 checks.conf 中读取容器配置
+    while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        if [[ "$line" =~ ^docker: ]]; then
+            IFS=":" read -r type container_name service_name <<< "$line"
+            CONTAINERS["$container_name"]="$service_name"
+        fi
+    done < "$config_file"
+    
+    local docker_array=()
+    
+    if command -v docker &> /dev/null; then
+        for container_name in "${!CONTAINERS[@]}"; do
+            local service_name="${CONTAINERS[$container_name]}"
+            local container_id=$(docker ps -a --filter "name=$container_name" --format "{{.ID}}" 2>/dev/null | head -1)
+            
+            if [[ -n "$container_id" ]]; then
+                local state=$(docker inspect "$container_id" --format "{{.State.Status}}" 2>/dev/null)
+                local docker_stats=$(docker stats --no-stream "$container_id" --format "{{.CPUPerc}},{{.MemPerc}},{{.MemUsage}}" 2>/dev/null)
+                local cpu_pct=$(echo "$docker_stats" | cut -d',' -f1 | sed 's/%//')
+                local mem_pct=$(echo "$docker_stats" | cut -d',' -f2 | sed 's/%//')
+                local mem_usage=$(echo "$docker_stats" | cut -d',' -f3)
+                local size=$(docker inspect "$container_id" --format "{{.SizeRw}}" 2>/dev/null | numfmt --to=iec --suffix=B 2>/dev/null || echo "unknown")
+                local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
+                local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
+                
+                docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"container_id\":\"$(json_escape "$container_id")\",\"state\":\"$(json_escape "$state")\",\"cpu_usage\":${cpu_pct:-0},\"memory_usage\":${mem_pct:-0},\"memory_used\":\"$(json_escape "$mem_usage")\",\"disk_used\":\"$(json_escape "$size")\",\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\"}")
+            else
+                docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
+            fi
+        done
+    else
+        for container_name in "${!CONTAINERS[@]}"; do
+            local service_name="${CONTAINERS[$container_name]}"
+            docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"docker_unavailable\":true}")
+        done
+    fi
+    
+    local containers=$(IFS=, ; echo "${docker_array[*]}")
+    echo "$containers"
+}
+
+# 收集日志信息
+collect_log_info() {
+    local config_file="$1"
+    local -A LOGS
+    
+    # 从 checks.conf 中读取日志配置
+    while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        if [[ "$line" =~ ^log: ]]; then
+            IFS=":" read -r type log_path log_name <<< "$line"
+            LOGS["$log_path"]="$log_name"
+        fi
+    done < "$config_file"
+    
+    local log_array=()
+    
+    for log_path in "${!LOGS[@]}"; do
+        local log_name="${LOGS[$log_path]}"
+        if [[ -f "$log_path" ]]; then
+            local log_size=$(du -m "$log_path" 2>/dev/null | awk '{print $1}' || echo "N/A")
+            local recent_logs=$(tail -10 "$log_path" 2>/dev/null || echo "Cannot read log file")
+            
+            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"log_name\":\"$(json_escape "$log_name")\",\"size_mb\":${log_size:-0},\"recent_lines\":\"$(json_escape "$recent_logs")\"}")
+        else
+            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"log_name\":\"$(json_escape "$log_name")\",\"file_not_found\":true}")
+        fi
+    done
+    
+    local logs=$(IFS=, ; echo "${log_array[*]}")
+    
+    cat <<EOF
+  "log_info": {
+    "log_files": [${logs:-}]
+  }
+EOF
+}
+
 # 执行主函数
-if [[ $# -eq 3 ]]; then
-    main "$1" "$2" "$3"
+if [[ $# -eq 1 ]]; then
+    main "$1"
 else
     # 默认配置文件名
     SCRIPT_DIR="$(dirname "$0")"
-    main "$SCRIPT_DIR/conf/apps.conf" "$SCRIPT_DIR/conf/logs.conf" "$SCRIPT_DIR/conf/checks.conf"
+    main "$SCRIPT_DIR/conf/checks.conf"
 fi
