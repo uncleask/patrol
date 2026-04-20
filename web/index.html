@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patrol 系统巡检报告</title>
     <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="container">
@@ -17,16 +18,62 @@
         </header>
         
         <nav>
-            <h2>报告历史</h2>
-            <ul id="report-list">
-                <li>加载中...</li>
+            <h2>导航菜单</h2>
+            <ul>
+                <li><a href="#" id="nav-dates">巡检日期列表</a></li>
+                <li><a href="#" id="nav-trend">巡检趋势分析</a></li>
             </ul>
         </nav>
         
         <main>
-            <div id="report-content">
-                <div class="loading">
-                    <p>请选择一个报告查看</p>
+            <!-- 巡检日期列表页面 -->
+            <div id="dates-page" class="page active">
+                <h2>巡检日期列表</h2>
+                <div id="date-list" class="date-grid">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+            
+            <!-- 巡检结果页面 -->
+            <div id="result-page" class="page">
+                <h2>巡检结果详情</h2>
+                <div id="report-header">
+                    <h3 id="report-title">请选择一个报告</h3>
+                    <button id="back-to-dates" class="back-btn">返回日期列表</button>
+                </div>
+                <div id="report-content">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+            
+            <!-- 巡检趋势页面 -->
+            <div id="trend-page" class="page">
+                <h2>巡检趋势分析</h2>
+                <div class="trend-controls">
+                    <select id="trend-period">
+                        <option value="day">按日</option>
+                        <option value="week">按周</option>
+                        <option value="month">按月</option>
+                    </select>
+                    <button id="generate-trend">生成趋势</button>
+                </div>
+                <div class="trend-charts">
+                    <div class="chart-container">
+                        <h3>CPU 使用率趋势</h3>
+                        <canvas id="cpu-chart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <h3>内存使用率趋势</h3>
+                        <canvas id="mem-chart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <h3>磁盘使用率趋势</h3>
+                        <canvas id="disk-chart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <h3>告警数量趋势</h3>
+                        <canvas id="alarm-chart"></canvas>
+                    </div>
                 </div>
             </div>
         </main>
