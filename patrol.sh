@@ -313,13 +313,14 @@ EOF
         </div>
         
         <div class="section">
-            <h3>应用信息 - 进程</h3>
+            <h3>应用状态</h3>
             <table>
                 <tr>
                     <th>进程名</th>
-                    <th>服务名</th>
-                    <th>运行状态</th>
-                    <th>PID</th>
+                    <th>服务名称</th>
+                    <th>进程ID</th>
+                    <th>进程序态</th>
+                    <th>运行时长</th>
                     <th>CPU使用率</th>
                     <th>内存使用率</th>
                 </tr>
@@ -331,6 +332,8 @@ EOF
                 local service_name=$(jq -r ".servers[$i].results.app_info.processes[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
                 local running=$(jq -r ".servers[$i].results.app_info.processes[$j].running" "$json_report" 2>/dev/null || echo "false")
                 local pid=$(jq -r ".servers[$i].results.app_info.processes[$j].pid" "$json_report" 2>/dev/null || echo "N/A")
+                local state=$(jq -r ".servers[$i].results.app_info.processes[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                local running_time=$(jq -r ".servers[$i].results.app_info.processes[$j].running_time" "$json_report" 2>/dev/null || echo "unknown")
                 local cpu_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
                 local cpu_alarm=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_alarm_status" "$json_report" 2>/dev/null || echo "normal")
                 local mem_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
@@ -338,7 +341,7 @@ EOF
                 
                 local status_text=""
                 if [[ "$running" == "true" ]]; then
-                    status_text="运行中"
+                    status_text="<span class=\"normal\">running</span>"
                 else
                     status_text="<span class=\"serious\">未运行</span>"
                 fi
@@ -347,8 +350,9 @@ EOF
                 <tr>
                     <td>$proc_name</td>
                     <td>$service_name</td>
-                    <td>$status_text</td>
                     <td>$pid</td>
+                    <td>$status_text</td>
+                    <td>$running_time</td>
                     <td><span class="$cpu_alarm">$cpu_usage%</span></td>
                     <td><span class="$mem_alarm">$mem_usage%</span></td>
                 </tr>
@@ -360,16 +364,17 @@ EOF
         </div>
         
         <div class="section">
-            <h3>应用信息 - 容器</h3>
+            <h3>Docker容器状态</h3>
             <table>
                 <tr>
-                    <th>容器名</th>
-                    <th>服务名</th>
-                    <th>运行状态</th>
+                    <th>容器名称</th>
+                    <th>服务名称</th>
+                    <th>容器ID</th>
+                    <th>状态</th>
+                    <th>运行时长</th>
                     <th>CPU使用率</th>
                     <th>内存使用率</th>
                     <th>内存使用量</th>
-                    <th>磁盘使用量</th>
                 </tr>
 EOF
 
@@ -377,20 +382,21 @@ EOF
             for ((j=0; j<docker_count; j++)); do
                 local container_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_name" "$json_report" 2>/dev/null || echo "N/A")
                 local service_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                local container_id=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_id" "$json_report" 2>/dev/null || echo "N/A")
                 local state=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                local running_time="unknown"
                 local cpu_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
                 local cpu_alarm=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_alarm_status" "$json_report" 2>/dev/null || echo "normal")
                 local mem_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
                 local mem_alarm=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_alarm_status" "$json_report" 2>/dev/null || echo "normal")
                 local mem_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_used" "$json_report" 2>/dev/null || echo "N/A")
-                local disk_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].disk_used" "$json_report" 2>/dev/null || echo "N/A")
                 local docker_unavailable=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].docker_unavailable" "$json_report" 2>/dev/null || echo "false")
                 
                 local status_text=""
                 if [[ "$docker_unavailable" == "true" ]]; then
                     status_text="<span class=\"alarm\">Docker不可用</span>"
                 elif [[ "$state" == "running" ]]; then
-                    status_text="运行中"
+                    status_text="<span class=\"normal\">Up</span>"
                 else
                     status_text="<span class=\"serious\">$state</span>"
                 fi
@@ -399,11 +405,12 @@ EOF
                 <tr>
                     <td>$container_name</td>
                     <td>$service_name</td>
+                    <td>$container_id</td>
                     <td>$status_text</td>
+                    <td>$running_time</td>
                     <td><span class="$cpu_alarm">$cpu_usage%</span></td>
                     <td><span class="$mem_alarm">$mem_usage%</span></td>
                     <td>$mem_used</td>
-                    <td>$disk_used</td>
                 </tr>
 EOF
             done
@@ -500,7 +507,7 @@ EOF
   CPU使用率:  $(jq -r ".servers[$i].results.resource_info.cpu.usage" "$json_report" 2>/dev/null || echo "N/A")% [$(jq -r ".servers[$i].results.resource_info.cpu.alarm_status" "$json_report" 2>/dev/null || echo "normal")]
   内存使用率: $(jq -r ".servers[$i].results.resource_info.memory.usage_percent" "$json_report" 2>/dev/null || echo "N/A")% [$(jq -r ".servers[$i].results.resource_info.memory.alarm_status" "$json_report" 2>/dev/null || echo "normal")]
 
-应用信息 - 进程:
+应用状态:
 EOF
             
             local proc_count=$(jq -r ".servers[$i].results.app_info.processes | length" "$json_report" 2>/dev/null || echo 0)
@@ -510,18 +517,20 @@ EOF
                     local service_name=$(jq -r ".servers[$i].results.app_info.processes[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
                     local running=$(jq -r ".servers[$i].results.app_info.processes[$j].running" "$json_report" 2>/dev/null || echo "false")
                     local pid=$(jq -r ".servers[$i].results.app_info.processes[$j].pid" "$json_report" 2>/dev/null || echo "N/A")
+                    local state=$(jq -r ".servers[$i].results.app_info.processes[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                    local running_time=$(jq -r ".servers[$i].results.app_info.processes[$j].running_time" "$json_report" 2>/dev/null || echo "unknown")
                     local cpu_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
                     local mem_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
                     
                     local status_text=""
                     if [[ "$running" == "true" ]]; then
-                        status_text="运行中"
+                        status_text="running"
                     else
                         status_text="未运行"
                     fi
                     
                     cat >> "$txt_report" <<EOF
-  - $proc_name ($service_name): $status_text, PID: $pid, CPU: $cpu_usage%, 内存: $mem_usage%
+  - $proc_name ($service_name): 进程ID: $pid, 进程序态: $status_text, 运行时长: $running_time, CPU: $cpu_usage%, 内存: $mem_usage%
 EOF
                 done
             else
@@ -532,7 +541,7 @@ EOF
             
             cat >> "$txt_report" <<EOF
 
-应用信息 - 容器:
+Docker容器状态:
 EOF
             
             local docker_count=$(jq -r ".servers[$i].results.app_info.docker_containers | length" "$json_report" 2>/dev/null || echo 0)
@@ -540,22 +549,25 @@ EOF
                 for ((j=0; j<docker_count; j++)); do
                     local container_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_name" "$json_report" 2>/dev/null || echo "N/A")
                     local service_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local container_id=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_id" "$json_report" 2>/dev/null || echo "N/A")
                     local state=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                    local running_time="unknown"
                     local cpu_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
                     local mem_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
                     local mem_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_used" "$json_report" 2>/dev/null || echo "N/A")
-                    local disk_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].disk_used" "$json_report" 2>/dev/null || echo "N/A")
                     local docker_unavailable=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].docker_unavailable" "$json_report" 2>/dev/null || echo "false")
                     
                     local status_text=""
                     if [[ "$docker_unavailable" == "true" ]]; then
                         status_text="Docker不可用"
+                    elif [[ "$state" == "running" ]]; then
+                        status_text="Up"
                     else
                         status_text="$state"
                     fi
                     
                     cat >> "$txt_report" <<EOF
-  - $container_name ($service_name): 状态: $status_text, CPU: $cpu_usage%, 内存: $mem_usage%, 内存使用: $mem_used, 磁盘使用: $disk_used
+  - $container_name ($service_name): 容器ID: $container_id, 状态: $status_text, 运行时长: $running_time, CPU: $cpu_usage%, 内存: $mem_usage%, 内存使用: $mem_used
 EOF
                 done
             else
