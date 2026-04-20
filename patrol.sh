@@ -133,15 +133,13 @@ execute_remote_check() {
     
     local result_file="$TEMP_DIR/${alias}_result.json"
     local remote_script="/tmp/remote_collector.sh"
-    local remote_apps="/tmp/apps.conf"
-    local remote_logs="/tmp/logs.conf"
     local remote_checks="/tmp/checks.conf"
     
     if [[ "$ip" == "127.0.0.1" ]]; then
         # 本地服务器，直接执行
         echo "INFO: 开始本地服务器检查: $alias" >> "$LOG_FILE"
         
-        bash "$REMOTE_SCRIPT" "$APPS_CONF" "$LOGS_CONF" "$CHECKS_CONF" > "$result_file" 2>/dev/null
+        bash "$REMOTE_SCRIPT" "$CHECKS_CONF" > "$result_file" 2>/dev/null
         
         if [[ $? -ne 0 ]]; then
             echo -e "${RED}错误: 无法执行本地检查${NC}"
@@ -157,7 +155,7 @@ execute_remote_check() {
         return 0
     else
         # 远程服务器，使用 SSH
-        scp -i "$key" -P "$port" "$REMOTE_SCRIPT" "$APPS_CONF" "$LOGS_CONF" "$CHECKS_CONF" "$user@$ip:/tmp/" > /dev/null 2>&1
+        scp -i "$key" -P "$port" "$REMOTE_SCRIPT" "$CHECKS_CONF" "$user@$ip:/tmp/" > /dev/null 2>&1
         if [[ $? -ne 0 ]]; then
             echo -e "${RED}错误: 无法复制文件到服务器 $alias ($ip)${NC}"
             echo "错误: 无法复制文件到服务器 $alias ($ip)" >> "$LOG_FILE"
@@ -165,7 +163,7 @@ execute_remote_check() {
         fi
         
         ssh -i "$key" -p "$port" "$user@$ip" "chmod +x /tmp/remote_collector.sh" > /dev/null 2>&1
-        ssh -i "$key" -p "$port" "$user@$ip" "/tmp/remote_collector.sh /tmp/apps.conf /tmp/logs.conf /tmp/checks.conf" > "$result_file" 2>&1
+        ssh -i "$key" -p "$port" "$user@$ip" "/tmp/remote_collector.sh /tmp/checks.conf" > "$result_file" 2>&1
         
         if [[ $? -ne 0 ]]; then
             echo -e "${RED}错误: 无法执行远程检查在服务器 $alias ($ip)${NC}"
@@ -173,7 +171,7 @@ execute_remote_check() {
             return 1
         fi
         
-        ssh -i "$key" -p "$port" "$user@$ip" "rm -f /tmp/remote_collector.sh /tmp/apps.conf /tmp/logs.conf /tmp/checks.conf" > /dev/null 2>&1
+        ssh -i "$key" -p "$port" "$user@$ip" "rm -f /tmp/remote_collector.sh /tmp/checks.conf" > /dev/null 2>&1
     fi
     
     if [[ "$VERBOSE" == true ]]; then
