@@ -246,13 +246,13 @@ generate_html_report() {
     </div>
 EOF
 
-    local server_index=0
-    for server_info in "${PATROL_SERVERS[@]}"; do
-        read -r alias ip port user key password group_tags <<< "$server_info"
-        local result_file="$TEMP_DIR/${alias}_result.json"
+    local server_count=$(jq -r '.servers | length' "$json_report" 2>/dev/null || echo 0)
+    for ((i=0; i<server_count; i++)); do
+        local alias=$(jq -r ".servers[$i].alias" "$json_report" 2>/dev/null || echo "N/A")
+        local ip=$(jq -r ".servers[$i].ip" "$json_report" 2>/dev/null || echo "N/A")
+        local group_tags=$(jq -r ".servers[$i].groups" "$json_report" 2>/dev/null || echo "N/A")
         
-        if [[ -f "$result_file" ]]; then
-            cat >> "$html_report" <<EOF
+        cat >> "$html_report" <<EOF
     <div class="server">
         <h2>服务器: $alias ($ip)</h2>
         <p>所属组: $group_tags</p>
@@ -260,18 +260,18 @@ EOF
         <div class="section">
             <h3>系统信息</h3>
             <div class="card">
-                <p>操作系统版本: $(jq -r '.system_info.os_version' "$result_file" 2>/dev/null || echo "N/A")</p>
-                <p>内核版本: $(jq -r '.system_info.kernel_version' "$result_file" 2>/dev/null || echo "N/A")</p>
-                <p>运行时长: $(jq -r '.system_info.uptime' "$result_file" 2>/dev/null || echo "N/A")</p>
-                <p>CPU架构: $(jq -r '.system_info.cpu_arch' "$result_file" 2>/dev/null || echo "N/A")</p>
+                <p>操作系统版本: $(jq -r ".servers[$i].results.system_info.os_version" "$json_report" 2>/dev/null || echo "N/A")</p>
+                <p>内核版本: $(jq -r ".servers[$i].results.system_info.kernel_version" "$json_report" 2>/dev/null || echo "N/A")</p>
+                <p>运行时长: $(jq -r ".servers[$i].results.system_info.uptime" "$json_report" 2>/dev/null || echo "N/A")</p>
+                <p>CPU架构: $(jq -r ".servers[$i].results.system_info.cpu_arch" "$json_report" 2>/dev/null || echo "N/A")</p>
             </div>
         </div>
         
         <div class="section">
             <h3>资源信息</h3>
             <div class="card">
-                <p>CPU使用率: <span class="$(jq -r '.resource_info.cpu.alarm_status' "$result_file" 2>/dev/null || echo "normal")">$(jq -r '.resource_info.cpu.usage' "$result_file" 2>/dev/null || echo "N/A")%</span></p>
-                <p>内存使用率: <span class="$(jq -r '.resource_info.memory.alarm_status' "$result_file" 2>/dev/null || echo "normal")">$(jq -r '.resource_info.memory.usage_percent' "$result_file" 2>/dev/null || echo "N/A")%</span></p>
+                <p>CPU使用率: <span class="$(jq -r ".servers[$i].results.resource_info.cpu.alarm_status" "$json_report" 2>/dev/null || echo "normal")">$(jq -r ".servers[$i].results.resource_info.cpu.usage" "$json_report" 2>/dev/null || echo "N/A")%</span></p>
+                <p>内存使用率: <span class="$(jq -r ".servers[$i].results.resource_info.memory.alarm_status" "$json_report" 2>/dev/null || echo "normal")">$(jq -r ".servers[$i].results.resource_info.memory.usage_percent" "$json_report" 2>/dev/null || echo "N/A")%</span></p>
             </div>
             
             <h4>磁盘信息</h4>
@@ -286,15 +286,15 @@ EOF
                 </tr>
 EOF
 
-            local disk_count=$(jq -r '.resource_info.disks | length' "$result_file" 2>/dev/null || echo 0)
-            for ((i=0; i<disk_count; i++)); do
-                local fs=$(jq -r ".resource_info.disks[$i].filesystem" "$result_file" 2>/dev/null || echo "N/A")
-                local size=$(jq -r ".resource_info.disks[$i].size" "$result_file" 2>/dev/null || echo "N/A")
-                local used=$(jq -r ".resource_info.disks[$i].used" "$result_file" 2>/dev/null || echo "N/A")
-                local avail=$(jq -r ".resource_info.disks[$i].available" "$result_file" 2>/dev/null || echo "N/A")
-                local use_pct=$(jq -r ".resource_info.disks[$i].use_percent" "$result_file" 2>/dev/null || echo "N/A")
-                local mount=$(jq -r ".resource_info.disks[$i].mount_point" "$result_file" 2>/dev/null || echo "N/A")
-                local alarm=$(jq -r ".resource_info.disks[$i].alarm_status" "$result_file" 2>/dev/null || echo "normal")
+            local disk_count=$(jq -r ".servers[$i].results.resource_info.disks | length" "$json_report" 2>/dev/null || echo 0)
+            for ((j=0; j<disk_count; j++)); do
+                local fs=$(jq -r ".servers[$i].results.resource_info.disks[$j].filesystem" "$json_report" 2>/dev/null || echo "N/A")
+                local size=$(jq -r ".servers[$i].results.resource_info.disks[$j].size" "$json_report" 2>/dev/null || echo "N/A")
+                local used=$(jq -r ".servers[$i].results.resource_info.disks[$j].used" "$json_report" 2>/dev/null || echo "N/A")
+                local avail=$(jq -r ".servers[$i].results.resource_info.disks[$j].available" "$json_report" 2>/dev/null || echo "N/A")
+                local use_pct=$(jq -r ".servers[$i].results.resource_info.disks[$j].use_percent" "$json_report" 2>/dev/null || echo "N/A")
+                local mount=$(jq -r ".servers[$i].results.resource_info.disks[$j].mount_point" "$json_report" 2>/dev/null || echo "N/A")
+                local alarm=$(jq -r ".servers[$i].results.resource_info.disks[$j].alarm_status" "$json_report" 2>/dev/null || echo "normal")
                 
                 cat >> "$html_report" <<EOF
                 <tr>
@@ -325,16 +325,16 @@ EOF
                 </tr>
 EOF
 
-            local proc_count=$(jq -r '.app_info.processes | length' "$result_file" 2>/dev/null || echo 0)
-            for ((i=0; i<proc_count; i++)); do
-                local proc_name=$(jq -r ".app_info.processes[$i].process_name" "$result_file" 2>/dev/null || echo "N/A")
-                local service_name=$(jq -r ".app_info.processes[$i].service_name" "$result_file" 2>/dev/null || echo "N/A")
-                local running=$(jq -r ".app_info.processes[$i].running" "$result_file" 2>/dev/null || echo "false")
-                local pid=$(jq -r ".app_info.processes[$i].pid" "$result_file" 2>/dev/null || echo "N/A")
-                local cpu_usage=$(jq -r ".app_info.processes[$i].cpu_usage" "$result_file" 2>/dev/null || echo "N/A")
-                local cpu_alarm=$(jq -r ".app_info.processes[$i].cpu_alarm_status" "$result_file" 2>/dev/null || echo "normal")
-                local mem_usage=$(jq -r ".app_info.processes[$i].memory_usage" "$result_file" 2>/dev/null || echo "N/A")
-                local mem_alarm=$(jq -r ".app_info.processes[$i].memory_alarm_status" "$result_file" 2>/dev/null || echo "normal")
+            local proc_count=$(jq -r ".servers[$i].results.app_info.processes | length" "$json_report" 2>/dev/null || echo 0)
+            for ((j=0; j<proc_count; j++)); do
+                local proc_name=$(jq -r ".servers[$i].results.app_info.processes[$j].process_name" "$json_report" 2>/dev/null || echo "N/A")
+                local service_name=$(jq -r ".servers[$i].results.app_info.processes[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                local running=$(jq -r ".servers[$i].results.app_info.processes[$j].running" "$json_report" 2>/dev/null || echo "false")
+                local pid=$(jq -r ".servers[$i].results.app_info.processes[$j].pid" "$json_report" 2>/dev/null || echo "N/A")
+                local cpu_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
+                local cpu_alarm=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_alarm_status" "$json_report" 2>/dev/null || echo "normal")
+                local mem_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
+                local mem_alarm=$(jq -r ".servers[$i].results.app_info.processes[$j].memory_alarm_status" "$json_report" 2>/dev/null || echo "normal")
                 
                 local status_text=""
                 if [[ "$running" == "true" ]]; then
@@ -368,21 +368,28 @@ EOF
                     <th>运行状态</th>
                     <th>CPU使用率</th>
                     <th>内存使用率</th>
+                    <th>内存使用量</th>
+                    <th>磁盘使用量</th>
                 </tr>
 EOF
 
-            local docker_count=$(jq -r '.app_info.docker_containers | length' "$result_file" 2>/dev/null || echo 0)
-            for ((i=0; i<docker_count; i++)); do
-                local container_name=$(jq -r ".app_info.docker_containers[$i].container_name" "$result_file" 2>/dev/null || echo "N/A")
-                local service_name=$(jq -r ".app_info.docker_containers[$i].service_name" "$result_file" 2>/dev/null || echo "N/A")
-                local state=$(jq -r ".app_info.docker_containers[$i].state" "$result_file" 2>/dev/null || echo "unknown")
-                local cpu_usage=$(jq -r ".app_info.docker_containers[$i].cpu_usage" "$result_file" 2>/dev/null || echo "N/A")
-                local cpu_alarm=$(jq -r ".app_info.docker_containers[$i].cpu_alarm_status" "$result_file" 2>/dev/null || echo "normal")
-                local mem_usage=$(jq -r ".app_info.docker_containers[$i].memory_usage" "$result_file" 2>/dev/null || echo "N/A")
-                local mem_alarm=$(jq -r ".app_info.docker_containers[$i].memory_alarm_status" "$result_file" 2>/dev/null || echo "normal")
+            local docker_count=$(jq -r ".servers[$i].results.app_info.docker_containers | length" "$json_report" 2>/dev/null || echo 0)
+            for ((j=0; j<docker_count; j++)); do
+                local container_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_name" "$json_report" 2>/dev/null || echo "N/A")
+                local service_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                local state=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                local cpu_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
+                local cpu_alarm=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_alarm_status" "$json_report" 2>/dev/null || echo "normal")
+                local mem_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
+                local mem_alarm=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_alarm_status" "$json_report" 2>/dev/null || echo "normal")
+                local mem_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_used" "$json_report" 2>/dev/null || echo "N/A")
+                local disk_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].disk_used" "$json_report" 2>/dev/null || echo "N/A")
+                local docker_unavailable=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].docker_unavailable" "$json_report" 2>/dev/null || echo "false")
                 
                 local status_text=""
-                if [[ "$state" == "running" ]]; then
+                if [[ "$docker_unavailable" == "true" ]]; then
+                    status_text="<span class=\"alarm\">Docker不可用</span>"
+                elif [[ "$state" == "running" ]]; then
                     status_text="运行中"
                 else
                     status_text="<span class=\"serious\">$state</span>"
@@ -395,6 +402,48 @@ EOF
                     <td>$status_text</td>
                     <td><span class="$cpu_alarm">$cpu_usage%</span></td>
                     <td><span class="$mem_alarm">$mem_usage%</span></td>
+                    <td>$mem_used</td>
+                    <td>$disk_used</td>
+                </tr>
+EOF
+            done
+            
+            cat >> "$html_report" <<EOF
+            </table>
+        </div>
+        
+        <div class="section">
+            <h3>系统日志信息</h3>
+            <table>
+                <tr>
+                    <th>日志文件路径</th>
+                    <th>日志名称</th>
+                    <th>文件大小 (MB)</th>
+                    <th>最近10行日志</th>
+                </tr>
+EOF
+
+            local log_count=$(jq -r ".servers[$i].results.log_info.log_files | length" "$json_report" 2>/dev/null || echo 0)
+            for ((j=0; j<log_count; j++)); do
+                local log_path=$(jq -r ".servers[$i].results.log_info.log_files[$j].log_path" "$json_report" 2>/dev/null || echo "N/A")
+                local log_name=$(jq -r ".servers[$i].results.log_info.log_files[$j].log_name" "$json_report" 2>/dev/null || echo "N/A")
+                local size_mb=$(jq -r ".servers[$i].results.log_info.log_files[$j].size_mb" "$json_report" 2>/dev/null || echo "N/A")
+                local recent_lines=$(jq -r ".servers[$i].results.log_info.log_files[$j].recent_lines" "$json_report" 2>/dev/null || echo "N/A")
+                local file_not_found=$(jq -r ".servers[$i].results.log_info.log_files[$j].file_not_found" "$json_report" 2>/dev/null || echo "false")
+                
+                local status_text=""
+                if [[ "$file_not_found" == "true" ]]; then
+                    status_text="<span class=\"serious\">文件不存在</span>"
+                else
+                    status_text="$size_mb"
+                fi
+                
+                cat >> "$html_report" <<EOF
+                <tr>
+                    <td>$log_path</td>
+                    <td>$log_name</td>
+                    <td>$status_text</td>
+                    <td><pre>$recent_lines</pre></td>
                 </tr>
 EOF
             done
@@ -404,8 +453,6 @@ EOF
         </div>
     </div>
 EOF
-        fi
-        ((server_index++))
     done
 
     cat >> "$html_report" <<EOF
@@ -432,28 +479,124 @@ generate_txt_report() {
 
 EOF
 
-    for server_info in "${PATROL_SERVERS[@]}"; do
-        read -r alias ip port user key password group_tags <<< "$server_info"
-        local result_file="$TEMP_DIR/${alias}_result.json"
+    local server_count=$(jq -r '.servers | length' "$json_report" 2>/dev/null || echo 0)
+    for ((i=0; i<server_count; i++)); do
+        local alias=$(jq -r ".servers[$i].alias" "$json_report" 2>/dev/null || echo "N/A")
+        local ip=$(jq -r ".servers[$i].ip" "$json_report" 2>/dev/null || echo "N/A")
+        local group_tags=$(jq -r ".servers[$i].groups" "$json_report" 2>/dev/null || echo "N/A")
         
-        if [[ -f "$result_file" ]]; then
-            cat >> "$txt_report" <<EOF
+        cat >> "$txt_report" <<EOF
 
 [服务器: $alias ($ip)]
 所属组: $group_tags
 --------------------------------------------------
 系统信息:
-  操作系统: $(jq -r '.system_info.os_version' "$result_file" 2>/dev/null || echo "N/A")
-  内核版本: $(jq -r '.system_info.kernel_version' "$result_file" 2>/dev/null || echo "N/A")
-  运行时长: $(jq -r '.system_info.uptime' "$result_file" 2>/dev/null || echo "N/A")
-  CPU架构:  $(jq -r '.system_info.cpu_arch' "$result_file" 2>/dev/null || echo "N/A")
+  操作系统: $(jq -r ".servers[$i].results.system_info.os_version" "$json_report" 2>/dev/null || echo "N/A")
+  内核版本: $(jq -r ".servers[$i].results.system_info.kernel_version" "$json_report" 2>/dev/null || echo "N/A")
+  运行时长: $(jq -r ".servers[$i].results.system_info.uptime" "$json_report" 2>/dev/null || echo "N/A")
+  CPU架构:  $(jq -r ".servers[$i].results.system_info.cpu_arch" "$json_report" 2>/dev/null || echo "N/A")
 
 资源信息:
-  CPU使用率:  $(jq -r '.resource_info.cpu.usage' "$result_file" 2>/dev/null || echo "N/A")% [$(jq -r '.resource_info.cpu.alarm_status' "$result_file" 2>/dev/null || echo "normal")]
-  内存使用率: $(jq -r '.resource_info.memory.usage_percent' "$result_file" 2>/dev/null || echo "N/A")% [$(jq -r '.resource_info.memory.alarm_status' "$result_file" 2>/dev/null || echo "normal")]
+  CPU使用率:  $(jq -r ".servers[$i].results.resource_info.cpu.usage" "$json_report" 2>/dev/null || echo "N/A")% [$(jq -r ".servers[$i].results.resource_info.cpu.alarm_status" "$json_report" 2>/dev/null || echo "normal")]
+  内存使用率: $(jq -r ".servers[$i].results.resource_info.memory.usage_percent" "$json_report" 2>/dev/null || echo "N/A")% [$(jq -r ".servers[$i].results.resource_info.memory.alarm_status" "$json_report" 2>/dev/null || echo "normal")]
+
+应用信息 - 进程:
+EOF
+            
+            local proc_count=$(jq -r ".servers[$i].results.app_info.processes | length" "$json_report" 2>/dev/null || echo 0)
+            if [[ $proc_count -gt 0 ]]; then
+                for ((j=0; j<proc_count; j++)); do
+                    local proc_name=$(jq -r ".servers[$i].results.app_info.processes[$j].process_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local service_name=$(jq -r ".servers[$i].results.app_info.processes[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local running=$(jq -r ".servers[$i].results.app_info.processes[$j].running" "$json_report" 2>/dev/null || echo "false")
+                    local pid=$(jq -r ".servers[$i].results.app_info.processes[$j].pid" "$json_report" 2>/dev/null || echo "N/A")
+                    local cpu_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
+                    local mem_usage=$(jq -r ".servers[$i].results.app_info.processes[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
+                    
+                    local status_text=""
+                    if [[ "$running" == "true" ]]; then
+                        status_text="运行中"
+                    else
+                        status_text="未运行"
+                    fi
+                    
+                    cat >> "$txt_report" <<EOF
+  - $proc_name ($service_name): $status_text, PID: $pid, CPU: $cpu_usage%, 内存: $mem_usage%
+EOF
+                done
+            else
+                cat >> "$txt_report" <<EOF
+  无进程信息
+EOF
+            fi
+            
+            cat >> "$txt_report" <<EOF
+
+应用信息 - 容器:
+EOF
+            
+            local docker_count=$(jq -r ".servers[$i].results.app_info.docker_containers | length" "$json_report" 2>/dev/null || echo 0)
+            if [[ $docker_count -gt 0 ]]; then
+                for ((j=0; j<docker_count; j++)); do
+                    local container_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].container_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local service_name=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].service_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local state=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].state" "$json_report" 2>/dev/null || echo "unknown")
+                    local cpu_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].cpu_usage" "$json_report" 2>/dev/null || echo "N/A")
+                    local mem_usage=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_usage" "$json_report" 2>/dev/null || echo "N/A")
+                    local mem_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].memory_used" "$json_report" 2>/dev/null || echo "N/A")
+                    local disk_used=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].disk_used" "$json_report" 2>/dev/null || echo "N/A")
+                    local docker_unavailable=$(jq -r ".servers[$i].results.app_info.docker_containers[$j].docker_unavailable" "$json_report" 2>/dev/null || echo "false")
+                    
+                    local status_text=""
+                    if [[ "$docker_unavailable" == "true" ]]; then
+                        status_text="Docker不可用"
+                    else
+                        status_text="$state"
+                    fi
+                    
+                    cat >> "$txt_report" <<EOF
+  - $container_name ($service_name): 状态: $status_text, CPU: $cpu_usage%, 内存: $mem_usage%, 内存使用: $mem_used, 磁盘使用: $disk_used
+EOF
+                done
+            else
+                cat >> "$txt_report" <<EOF
+  无容器信息
+EOF
+            fi
+            
+            cat >> "$txt_report" <<EOF
+
+系统日志信息:
+EOF
+            
+            local log_count=$(jq -r ".servers[$i].results.log_info.log_files | length" "$json_report" 2>/dev/null || echo 0)
+            if [[ $log_count -gt 0 ]]; then
+                for ((j=0; j<log_count; j++)); do
+                    local log_path=$(jq -r ".servers[$i].results.log_info.log_files[$j].log_path" "$json_report" 2>/dev/null || echo "N/A")
+                    local log_name=$(jq -r ".servers[$i].results.log_info.log_files[$j].log_name" "$json_report" 2>/dev/null || echo "N/A")
+                    local size_mb=$(jq -r ".servers[$i].results.log_info.log_files[$j].size_mb" "$json_report" 2>/dev/null || echo "N/A")
+                    local file_not_found=$(jq -r ".servers[$i].results.log_info.log_files[$j].file_not_found" "$json_report" 2>/dev/null || echo "false")
+                    
+                    local status_text=""
+                    if [[ "$file_not_found" == "true" ]]; then
+                        status_text="文件不存在"
+                    else
+                        status_text="大小: ${size_mb}MB"
+                    fi
+                    
+                    cat >> "$txt_report" <<EOF
+  - $log_name: $log_path ($status_text)
+EOF
+                done
+            else
+                cat >> "$txt_report" <<EOF
+  无日志信息
+EOF
+            fi
+            
+            cat >> "$txt_report" <<EOF
 
 EOF
-        fi
     done
     
     echo -e "${GREEN}TXT 报告生成: $txt_report${NC}"

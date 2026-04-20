@@ -164,8 +164,8 @@ collect_network_info() {
     
     cat <<EOF
   "network_info": {
-    "interfaces": $(json_escape "$(ip addr 2>&1)"),
-    "routes": $(json_escape "$(ip route 2>&1)"),
+    "interfaces": "$(json_escape "$(ip addr 2>&1)")",
+    "routes": "$(json_escape "$(ip route 2>&1)")",
     "firewall": "$(json_escape "$firewall_output")"
   }
 EOF
