@@ -72,65 +72,59 @@ function loadDateList() {
     const dateListContainer = document.getElementById('date-list');
     dateListContainer.innerHTML = '<div class="loading">加载中...</div>';
     
-    // 模拟从 output 目录加载报告
-    // 实际项目中，这里应该通过后端 API 获取文件列表
-    setTimeout(() => {
-        // 模拟报告数据
-        const reports = [
-            {
-                id: 'patrol_report_20260420_154831',
-                date: '2026-04-20 15:48:31',
-                servers: 1,
-                alarms: 2,
-                serious: 1
-            },
-            {
-                id: 'patrol_report_20260420_154200',
-                date: '2026-04-20 15:42:00',
-                servers: 1,
-                alarms: 1,
-                serious: 0
-            },
-            {
-                id: 'patrol_report_20260420_143407',
-                date: '2026-04-20 14:34:07',
-                servers: 1,
-                alarms: 0,
-                serious: 0
-            }
-        ];
-        
-        // 生成日期卡片
-        dateListContainer.innerHTML = '';
-        reports.forEach(report => {
+    // 直接使用最新的报告文件名
+    const latestReportId = 'patrol_report_20260421_175130';
+    const date = '2026-04-21 17:51:30';
+    
+    // 加载最新报告获取详细信息
+    fetch(`../output/${latestReportId}.json`)
+        .then(response => response.json())
+        .then(data => {
+            const serverCount = data.servers.length;
+            let alarmCount = 0;
+            let seriousCount = 0;
+            
+            data.servers.forEach(server => {
+                const serverInfo = server.results[0];
+                if (serverInfo) {
+                    alarmCount += serverInfo.result.warn_count + serverInfo.result.serious_count;
+                    seriousCount += serverInfo.result.serious_count;
+                }
+            });
+            
+            // 生成日期卡片
+            dateListContainer.innerHTML = '';
             const card = document.createElement('div');
             card.className = 'date-card';
             card.innerHTML = `
-                <h3>${report.date}</h3>
-                <p>服务器数量: ${report.servers}</p>
-                <p>告警数量: ${report.alarms}</p>
-                <p>严重告警: ${report.serious}</p>
+                <h3>${date}</h3>
+                <p>服务器数量: ${serverCount}</p>
+                <p>告警数量: ${alarmCount}</p>
+                <p>严重告警: ${seriousCount}</p>
             `;
             
             // 添加告警徽章
-            if (report.serious > 0) {
+            if (seriousCount > 0) {
                 const badge = document.createElement('div');
                 badge.className = 'alarm-badge serious';
-                badge.textContent = `严重 ${report.serious}`;
+                badge.textContent = `严重 ${seriousCount}`;
                 card.appendChild(badge);
-            } else if (report.alarms > 0) {
+            } else if (alarmCount > 0) {
                 const badge = document.createElement('div');
                 badge.className = 'alarm-badge alarm';
-                badge.textContent = `告警 ${report.alarms}`;
+                badge.textContent = `告警 ${alarmCount}`;
                 card.appendChild(badge);
             }
             
             // 点击事件
-            card.addEventListener('click', () => loadReport(report.id));
+            card.addEventListener('click', () => loadReport(latestReportId));
             
             dateListContainer.appendChild(card);
+        })
+        .catch(error => {
+            console.error('加载报告失败:', error);
+            dateListContainer.innerHTML = '<div class="error">加载报告失败</div>';
         });
-    }, 1000);
 }
 
 // 加载报告详情
@@ -138,66 +132,18 @@ function loadReport(reportId) {
     const reportContent = document.getElementById('report-content');
     reportContent.innerHTML = '<div class="loading">加载中...</div>';
     
-    // 模拟加载报告数据
-    setTimeout(() => {
-        // 模拟报告数据
-        const report = {
-            timestamp: '2026-04-20T15:48:31',
-            servers: [{
-                alias: 'localserv',
-                ip: '127.0.0.1',
-                groups: 'group_local',
-                results: {
-                    system_info: {
-                        os_version: 'Ubuntu 24.04.3 LTS',
-                        kernel_version: '6.18.5',
-                        uptime: 'up 7:56',
-                        cpu_arch: '64位'
-                    },
-                    resource_info: {
-                        cpu: { usage: 100, alarm_status: 'serious' },
-                        memory: { total_mb: 5974, used_mb: 731, usage_percent: 12.24, alarm_status: 'normal' },
-                        disks: [{
-                            filesystem: 'none',
-                            size: '1.5T',
-                            used: '84G',
-                            available: '1.3T',
-                            use_percent: 6,
-                            mount_point: '/',
-                            alarm_status: 'normal'
-                        }]
-                    },
-                    app_info: {
-                        processes: [{
-                            process_name: 'sshd',
-                            service_name: 'SSH服务',
-                            running: false
-                        }, {
-                            process_name: 'cron',
-                            service_name: '定时任务服务',
-                            running: false
-                        }],
-                        docker_containers: []
-                    },
-                    checks: [{
-                        name: 'cpu',
-                        type: 'cpu',
-                        value: '%Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st ',
-                        status: 'normal'
-                    }, {
-                        name: 'mem',
-                        type: 'mem',
-                        value: 'total: 5974MB, used: 735MB',
-                        status: 'serious'
-                    }]
-                }
-            }]
-        };
-        
-        currentReport = report;
-        displayReport(report);
-        showPage('result-page');
-    }, 1000);
+    // 从实际的JSON文件加载报告数据
+    fetch(`../output/${reportId}.json`)
+        .then(response => response.json())
+        .then(report => {
+            currentReport = report;
+            displayReport(report);
+            showPage('result-page');
+        })
+        .catch(error => {
+            console.error('加载报告详情失败:', error);
+            reportContent.innerHTML = '<div class="error">加载报告详情失败</div>';
+        });
 }
 
 // 显示报告详情
@@ -260,9 +206,14 @@ function displayReport(report) {
     
     // 服务器信息
     report.servers.forEach(server => {
+        // 获取服务器信息（新结构）
+        const serverInfo = server.results[0];
+        if (!serverInfo) return;
+        
         content += `
             <div class="service-section">
                 <h3>服务信息 - ${server.alias} (${server.ip})</h3>
+                <p>巡检时间: ${serverInfo.time}</p>
                 
                 <!-- 系统信息 -->
                 <div class="card">
@@ -273,20 +224,24 @@ function displayReport(report) {
                             <th>值</th>
                         </tr>
                         <tr>
-                            <td>操作系统版本</td>
-                            <td>${server.results.system_info.os_version}</td>
+                            <td>主机名</td>
+                            <td>${serverInfo.hostname}</td>
                         </tr>
                         <tr>
-                            <td>内核版本</td>
-                            <td>${server.results.system_info.kernel_version}</td>
+                            <td>IP地址</td>
+                            <td>${serverInfo.hostip}</td>
+                        </tr>
+                        <tr>
+                            <td>操作系统</td>
+                            <td>${serverInfo.os}</td>
+                        </tr>
+                        <tr>
+                            <td>系统启动时间</td>
+                            <td>${serverInfo.uptimesince}</td>
                         </tr>
                         <tr>
                             <td>运行时长</td>
-                            <td>${server.results.system_info.uptime}</td>
-                        </tr>
-                        <tr>
-                            <td>CPU架构</td>
-                            <td>${server.results.system_info.cpu_arch}</td>
+                            <td>${serverInfo.uptimeduration}</td>
                         </tr>
                     </table>
                 </div>
@@ -294,24 +249,82 @@ function displayReport(report) {
                 <!-- 资源信息 -->
                 <div class="card">
                     <h4>资源信息</h4>
+                    
+                    <h5>CPU信息</h5>
                     <table>
                         <tr>
-                            <th>资源</th>
-                            <th>使用率</th>
+                            <th>项目</th>
+                            <th>值</th>
                             <th>状态</th>
                         </tr>
                         <tr>
-                            <td>CPU</td>
-                            <td>${server.results.resource_info.cpu.usage}%</td>
-                            <td class="status-${server.results.resource_info.cpu.alarm_status}">
-                                ${server.results.resource_info.cpu.alarm_status}
+                            <td>使用率</td>
+                            <td>${serverInfo.cpu.usage}${serverInfo.cpu.usage ? '%' : ''}</td>
+                            <td class="status-${serverInfo.cpu.usestate}">
+                                ${serverInfo.cpu.usestate}
                             </td>
                         </tr>
                         <tr>
-                            <td>内存</td>
-                            <td>${server.results.resource_info.memory.usage_percent.toFixed(2)}%</td>
-                            <td class="status-${server.results.resource_info.memory.alarm_status}">
-                                ${server.results.resource_info.memory.alarm_status}
+                            <td>系统使用率</td>
+                            <td>${serverInfo.cpu.sysusage}%</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>空闲率</td>
+                            <td>${serverInfo.cpu.idle}%</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>IO等待</td>
+                            <td>${serverInfo.cpu.iowait}%</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>平均负载</td>
+                            <td>${serverInfo.cpu.avgload}</td>
+                            <td></td>
+                        </tr>
+                    </table>
+                    
+                    <h5>内存信息</h5>
+                    <table>
+                        <tr>
+                            <th>项目</th>
+                            <th>值</th>
+                            <th>状态</th>
+                        </tr>
+                        <tr>
+                            <td>总内存</td>
+                            <td>${serverInfo.memory.total}MB</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>已用内存</td>
+                            <td>${serverInfo.memory.used}MB</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>空闲内存</td>
+                            <td>${serverInfo.memory.free}MB</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>可用内存</td>
+                            <td>${serverInfo.memory.available}MB</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>使用率</td>
+                            <td>${serverInfo.memory.usage}${serverInfo.memory.usage ? '%' : ''}</td>
+                            <td class="status-${serverInfo.memory.usestate}">
+                                ${serverInfo.memory.usestate}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>交换空间</td>
+                            <td>${serverInfo.memory.swaptotal}MB / 已用: ${serverInfo.memory.swapused}MB / 空闲: ${serverInfo.memory.swapfree}MB</td>
+                            <td class="status-${serverInfo.memory.swapusestate}">
+                                ${serverInfo.memory.swapusestate}
                             </td>
                         </tr>
                     </table>
@@ -319,66 +332,125 @@ function displayReport(report) {
                     <h5>磁盘信息</h5>
                     <table>
                         <tr>
+                            <th>挂载点</th>
                             <th>文件系统</th>
-                            <th>大小</th>
+                            <th>总大小</th>
                             <th>已用</th>
                             <th>可用</th>
                             <th>使用率</th>
                             <th>状态</th>
                         </tr>
-                        ${server.results.resource_info.disks.map(disk => `
+                        ${serverInfo.disk.map(disk => `
                             <tr>
+                                <td>${disk.mounted}</td>
                                 <td>${disk.filesystem}</td>
-                                <td>${disk.size}</td>
+                                <td>${disk.total}</td>
                                 <td>${disk.used}</td>
                                 <td>${disk.available}</td>
-                                <td>${disk.use_percent}%</td>
-                                <td class="status-${disk.alarm_status}">
-                                    ${disk.alarm_status}
+                                <td>${disk.usage}${disk.usage ? '%' : ''}</td>
+                                <td class="status-${disk.usestate}">
+                                    ${disk.usestate}
                                 </td>
                             </tr>
                         `).join('')}
                     </table>
                 </div>
                 
-                <!-- 虚机进程列表 -->
+                <!-- 应用状态 -->
                 <div class="card">
-                    <h4>虚机进程列表</h4>
+                    <h4>应用状态</h4>
                     <table>
                         <tr>
-                            <th>进程名</th>
-                            <th>服务名</th>
-                            <th>运行状态</th>
+                            <th>应用名称</th>
+                            <th>类型</th>
+                            <th>用户</th>
+                            <th>进程ID</th>
+                            <th>状态</th>
+                            <th>CPU使用率</th>
+                            <th>内存使用率</th>
+                            <th>运行时长</th>
                         </tr>
-                        ${server.results.app_info.processes.map(process => `
-                            <tr>
-                                <td>${process.process_name}</td>
-                                <td>${process.service_name}</td>
-                                <td>${process.running ? '运行中' : '未运行'}</td>
-                            </tr>
-                        `).join('')}
+                        ${serverInfo.apps.length > 0 ? 
+                            serverInfo.apps.map(app => `
+                                <tr>
+                                    <td>${app.name}</td>
+                                    <td>${app.type}</td>
+                                    <td>${app.user || 'N/A'}</td>
+                                    <td>${app.pid || 'N/A'}</td>
+                                    <td class="${app.state === 'running' ? 'status-normal' : 'status-serious'}">${app.state}</td>
+                                    <td>${app.cpuusage || 'N/A'}%</td>
+                                    <td>${app.memusage || 'N/A'}%</td>
+                                    <td>${app.runtime || 'N/A'}</td>
+                                </tr>
+                            `).join('') : 
+                            '<tr><td colspan="8">无应用</td></tr>'
+                        }
                     </table>
                 </div>
                 
-                <!-- 容器进程列表 -->
+                <!-- Docker容器状态 -->
                 <div class="card">
-                    <h4>容器进程列表</h4>
+                    <h4>Docker容器状态</h4>
                     <table>
                         <tr>
-                            <th>容器名</th>
-                            <th>服务名</th>
-                            <th>运行状态</th>
+                            <th>容器名称</th>
+                            <th>容器ID</th>
+                            <th>状态</th>
+                            <th>详细状态</th>
                         </tr>
-                        ${server.results.app_info.docker_containers.length > 0 ? 
-                            server.results.app_info.docker_containers.map(container => `
-                                <tr>
-                                    <td>${container.container_name}</td>
-                                    <td>${container.service_name}</td>
-                                    <td>${container.state}</td>
-                                </tr>
-                            `).join('') : 
-                            '<tr><td colspan="3">无容器</td></tr>'
+                        ${serverInfo.dockers.length > 0 ? 
+                            serverInfo.dockers.map(container => {
+                                let statusClass = '';
+                                if (container.state === 'running') {
+                                    statusClass = 'status-normal';
+                                } else if (container.state === 'not_found') {
+                                    statusClass = 'status-serious';
+                                } else {
+                                    statusClass = 'status-alarm';
+                                }
+                                
+                                return `
+                                    <tr>
+                                        <td>${container.name}</td>
+                                        <td>${container.id || 'N/A'}</td>
+                                        <td class="${statusClass}">${container.state}</td>
+                                        <td>${container.status || 'N/A'}</td>
+                                    </tr>
+                                `;
+                            }).join('') : 
+                            '<tr><td colspan="4">无容器</td></tr>'
                         }
+                    </table>
+                </div>
+                
+                <!-- 巡检结果 -->
+                <div class="card">
+                    <h4>巡检结果</h4>
+                    <table>
+                        <tr>
+                            <th>项目</th>
+                            <th>值</th>
+                        </tr>
+                        <tr>
+                            <td>总检查项</td>
+                            <td>${serverInfo.result.all_count}</td>
+                        </tr>
+                        <tr>
+                            <td>正常</td>
+                            <td>${serverInfo.result.normal_count}</td>
+                        </tr>
+                        <tr>
+                            <td>警告</td>
+                            <td>${serverInfo.result.warn_count}</td>
+                        </tr>
+                        <tr>
+                            <td>严重</td>
+                            <td>${serverInfo.result.serious_count}</td>
+                        </tr>
+                        <tr>
+                            <td>状态描述</td>
+                            <td>${serverInfo.result.description}</td>
+                        </tr>
                     </table>
                 </div>
             </div>
@@ -392,10 +464,20 @@ function displayReport(report) {
 function countAlarms(report) {
     let count = 0;
     report.servers.forEach(server => {
-        if (server.results.resource_info.cpu.alarm_status !== 'normal') count++;
-        if (server.results.resource_info.memory.alarm_status !== 'normal') count++;
-        server.results.resource_info.disks.forEach(disk => {
-            if (disk.alarm_status !== 'normal') count++;
+        const serverInfo = server.results[0];
+        if (!serverInfo) return;
+        
+        if (serverInfo.cpu.usestate !== 'normal') count++;
+        if (serverInfo.memory.usestate !== 'normal') count++;
+        if (serverInfo.memory.swapusestate !== 'normal') count++;
+        serverInfo.disk.forEach(disk => {
+            if (disk.usestate !== 'normal') count++;
+        });
+        serverInfo.apps.forEach(app => {
+            if (app.state !== 'running') count++;
+        });
+        serverInfo.dockers.forEach(container => {
+            if (container.state !== 'running') count++;
         });
     });
     return count;
@@ -405,10 +487,20 @@ function countAlarms(report) {
 function countSeriousAlarms(report) {
     let count = 0;
     report.servers.forEach(server => {
-        if (server.results.resource_info.cpu.alarm_status === 'serious') count++;
-        if (server.results.resource_info.memory.alarm_status === 'serious') count++;
-        server.results.resource_info.disks.forEach(disk => {
-            if (disk.alarm_status === 'serious') count++;
+        const serverInfo = server.results[0];
+        if (!serverInfo) return;
+        
+        if (serverInfo.cpu.usestate === 'serious') count++;
+        if (serverInfo.memory.usestate === 'serious') count++;
+        if (serverInfo.memory.swapusestate === 'serious') count++;
+        serverInfo.disk.forEach(disk => {
+            if (disk.usestate === 'serious') count++;
+        });
+        serverInfo.apps.forEach(app => {
+            if (app.state !== 'running') count++;
+        });
+        serverInfo.dockers.forEach(container => {
+            if (container.state === 'not_found') count++;
         });
     });
     return count;
@@ -418,26 +510,54 @@ function countSeriousAlarms(report) {
 function collectAlarms(report) {
     const alarms = [];
     report.servers.forEach(server => {
-        if (server.results.resource_info.cpu.alarm_status !== 'normal') {
+        const serverInfo = server.results[0];
+        if (!serverInfo) return;
+        
+        if (serverInfo.cpu.usestate !== 'normal') {
             alarms.push({
                 server: server.alias,
-                message: `CPU使用率过高 (${server.results.resource_info.cpu.usage}%)`,
-                status: server.results.resource_info.cpu.alarm_status
+                message: `CPU使用率过高 (${serverInfo.cpu.usage}%)`,
+                status: serverInfo.cpu.usestate
             });
         }
-        if (server.results.resource_info.memory.alarm_status !== 'normal') {
+        if (serverInfo.memory.usestate !== 'normal') {
             alarms.push({
                 server: server.alias,
-                message: `内存使用率过高 (${server.results.resource_info.memory.usage_percent.toFixed(2)}%)`,
-                status: server.results.resource_info.memory.alarm_status
+                message: `内存使用率过高 (${serverInfo.memory.usage}%)`,
+                status: serverInfo.memory.usestate
             });
         }
-        server.results.resource_info.disks.forEach(disk => {
-            if (disk.alarm_status !== 'normal') {
+        if (serverInfo.memory.swapusestate !== 'normal') {
+            alarms.push({
+                server: server.alias,
+                message: `交换空间使用率过高`,
+                status: serverInfo.memory.swapusestate
+            });
+        }
+        serverInfo.disk.forEach(disk => {
+            if (disk.usestate !== 'normal') {
                 alarms.push({
                     server: server.alias,
-                    message: `磁盘使用率过高 - ${disk.mount_point} (${disk.use_percent}%)`,
-                    status: disk.alarm_status
+                    message: `磁盘使用率过高 - ${disk.mounted} (${disk.usage}%)`,
+                    status: disk.usestate
+                });
+            }
+        });
+        serverInfo.apps.forEach(app => {
+            if (app.state !== 'running') {
+                alarms.push({
+                    server: server.alias,
+                    message: `应用 ${app.name} 未运行`,
+                    status: 'serious'
+                });
+            }
+        });
+        serverInfo.dockers.forEach(container => {
+            if (container.state !== 'running') {
+                alarms.push({
+                    server: server.alias,
+                    message: `容器 ${container.name} 状态异常 (${container.state})`,
+                    status: container.state === 'not_found' ? 'serious' : 'alarm'
                 });
             }
         });
