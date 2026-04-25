@@ -1,750 +1,561 @@
 // 全局变量
-let currentReport = null;
-let charts = {};
+let reports = [];
 
-// 初始化页面
-function initPage() {
-    // 设置当前时间
-    updateCurrentTime();
-    setInterval(updateCurrentTime, 1000);
-    
-    // 绑定导航事件
-    bindNavigationEvents();
-    
-    // 加载日期列表
-    loadDateList();
-    
-    // 绑定刷新按钮
-    document.getElementById('refresh-btn').addEventListener('click', loadDateList);
-}
+// 页面加载完成后执行
+window.onload = function() {
+    if (window.location.pathname.includes('index.html') || window.location.pathname.endsWith('/') || window.location.pathname.endsWith('/web/')) {
+        loadReportList();
+    } else if (window.location.pathname.includes('report.html')) {
+        loadReportDetail();
+    } else if (window.location.pathname.includes('trend.html')) {
+        loadTrendData();
+    }
+};
 
-// 更新当前时间
-function updateCurrentTime() {
-    const now = new Date();
-    const timeString = now.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-    });
-    document.getElementById('current-time').textContent = timeString;
-}
-
-// 绑定导航事件
-function bindNavigationEvents() {
-    // 日期列表导航
-    document.getElementById('nav-dates').addEventListener('click', function(e) {
-        e.preventDefault();
-        showPage('dates-page');
-    });
-    
-    // 趋势分析导航
-    document.getElementById('nav-trend').addEventListener('click', function(e) {
-        e.preventDefault();
-        showPage('trend-page');
-        initCharts();
-    });
-    
-    // 返回日期列表按钮
-    document.getElementById('back-to-dates').addEventListener('click', function() {
-        showPage('dates-page');
-    });
-    
-    // 生成趋势按钮
-    document.getElementById('generate-trend').addEventListener('click', generateTrend);
-}
-
-// 显示指定页面
-function showPage(pageId) {
-    // 隐藏所有页面
-    document.querySelectorAll('.page').forEach(page => {
-        page.classList.remove('active');
-    });
-    
-    // 显示指定页面
-    document.getElementById(pageId).classList.add('active');
-}
-
-// 加载日期列表
-function loadDateList() {
-    const dateListContainer = document.getElementById('date-list');
+// 加载报告列表
+function loadReportList() {
+    const dateListContainer = document.getElementById('report-list');
     dateListContainer.innerHTML = '<div class="loading">加载中...</div>';
     
-    // 直接使用最新的报告文件名
-    const latestReportId = 'patrol_report_20260421_175130';
+    // 尝试直接使用我们现有的报告
+    const reportId = 'patrol_report_20260421_175130';
     const date = '2026-04-21 17:51:30';
     
-    // 加载最新报告获取详细信息
-    fetch(`../output/${latestReportId}.json`)
-        .then(response => response.json())
-        .then(data => {
-            const serverCount = data.servers.length;
-            let alarmCount = 0;
-            let seriousCount = 0;
-            
-            data.servers.forEach(server => {
-                const serverInfo = server.results[0];
-                if (serverInfo) {
-                    alarmCount += serverInfo.result.warn_count + serverInfo.result.serious_count;
-                    seriousCount += serverInfo.result.serious_count;
+    console.log('当前页面路径:', window.location.pathname);
+    
+    // 尝试几种不同的路径
+    const possiblePaths = [
+        `output/${reportId}.json`,
+        `../output/${reportId}.json`,
+        `../../output/${reportId}.json`,
+        `/output/${reportId}.json`
+    ];
+    
+    // 按顺序尝试路径
+    function tryPath(index) {
+        if (index >= possiblePaths.length) {
+            console.error('所有路径都尝试失败');
+            dateListContainer.innerHTML = '<div class="alert alert-danger">加载报告失败，请检查文件路径或网络连接</div>';
+            return;
+        }
+        
+        const path = possiblePaths[index];
+        console.log('尝试路径:', path);
+        
+        fetch(path)
+            .then(response => {
+                console.log('响应状态:', response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                return response.text();
+            })
+            .then(text => {
+                try {
+                    const data = JSON.parse(text);
+                    console.log('成功加载JSON数据');
+                    const serverCount = data.servers.length;
+                    let totalCount = 0;
+                    let normalCount = 0;
+                    let warnCount = 0;
+                    let seriousCount = 0;
+                    
+                    data.servers.forEach(server => {
+                        const serverInfo = server.results[0];
+                        if (serverInfo && serverInfo.result) {
+                            totalCount += serverInfo.result.all_count || 0;
+                            normalCount += serverInfo.result.normal_count || 0;
+                            warnCount += serverInfo.result.warn_count || 0;
+                            seriousCount += serverInfo.result.serious_count || 0;
+                        }
+                    });
+                    
+                    // 渲染报告列表
+                    dateListContainer.innerHTML = '';
+                    const card = document.createElement('div');
+                    card.className = 'report-item';
+                    
+                    let statusClass = 'status-pass';
+                    if (seriousCount > 0) statusClass = 'status-fail';
+                    else if (warnCount > 0) statusClass = 'status-warn';
+                    
+                    card.innerHTML = `
+                        <h3>${date}</h3>
+                        <p>服务器数量: ${serverCount}</p>
+                        <p>检查项: 总计 ${totalCount} | 正常 ${normalCount} | 警告 ${warnCount} | 严重 ${seriousCount}</p>
+                        <p>状态: <span class="${statusClass}">${seriousCount > 0 ? '有严重问题' : warnCount > 0 ? '有警告' : '正常'}</span></p>
+                        <div class="links">
+                            <a href="report.html?id=${reportId}">查看详情</a>
+                        </div>
+                    `;
+                    
+                    dateListContainer.appendChild(card);
+                } catch (e) {
+                    console.error('JSON解析失败，文本内容:', text.substring(0, 200));
+                    tryPath(index + 1);
+                }
+            })
+            .catch(error => {
+                console.error('路径', path, '失败:', error);
+                tryPath(index + 1);
             });
-            
-            // 生成日期卡片
-            dateListContainer.innerHTML = '';
-            const card = document.createElement('div');
-            card.className = 'date-card';
-            card.innerHTML = `
-                <h3>${date}</h3>
-                <p>服务器数量: ${serverCount}</p>
-                <p>告警数量: ${alarmCount}</p>
-                <p>严重告警: ${seriousCount}</p>
-            `;
-            
-            // 添加告警徽章
-            if (seriousCount > 0) {
-                const badge = document.createElement('div');
-                badge.className = 'alarm-badge serious';
-                badge.textContent = `严重 ${seriousCount}`;
-                card.appendChild(badge);
-            } else if (alarmCount > 0) {
-                const badge = document.createElement('div');
-                badge.className = 'alarm-badge alarm';
-                badge.textContent = `告警 ${alarmCount}`;
-                card.appendChild(badge);
-            }
-            
-            // 点击事件
-            card.addEventListener('click', () => loadReport(latestReportId));
-            
-            dateListContainer.appendChild(card);
-        })
-        .catch(error => {
-            console.error('加载报告失败:', error);
-            dateListContainer.innerHTML = '<div class="error">加载报告失败</div>';
-        });
+    }
+    
+    tryPath(0);
 }
 
 // 加载报告详情
-function loadReport(reportId) {
-    const reportContent = document.getElementById('report-content');
-    reportContent.innerHTML = '<div class="loading">加载中...</div>';
+function loadReportDetail() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const reportId = urlParams.get('id');
     
-    // 从实际的JSON文件加载报告数据
-    fetch(`../output/${reportId}.json`)
-        .then(response => response.json())
-        .then(report => {
-            currentReport = report;
-            displayReport(report);
-            showPage('result-page');
-        })
-        .catch(error => {
-            console.error('加载报告详情失败:', error);
-            reportContent.innerHTML = '<div class="error">加载报告详情失败</div>';
-        });
+    if (!reportId) {
+        document.getElementById('content').innerHTML = '<div class="alert alert-danger"><h3>错误</h3><p>未指定报告ID</p></div>';
+        return;
+    }
+    
+    const content = document.getElementById('content');
+    content.innerHTML = '<p>正在加载报告详情...</p>';
+    
+    console.log('当前页面路径:', window.location.pathname);
+    
+    // 尝试几种不同的路径
+    const possiblePaths = [
+        `output/${reportId}.json`,
+        `../output/${reportId}.json`,
+        `../../output/${reportId}.json`,
+        `/output/${reportId}.json`
+    ];
+    
+    // 按顺序尝试路径
+    function tryPath(index) {
+        if (index >= possiblePaths.length) {
+            console.error('所有路径都尝试失败');
+            content.innerHTML = '<div class="alert alert-danger"><h3>错误</h3><p>加载报告失败，请检查文件路径或网络连接</p></div>';
+            return;
+        }
+        
+        const path = possiblePaths[index];
+        console.log('尝试路径:', path);
+        
+        fetch(path)
+            .then(response => {
+                console.log('响应状态:', response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.text();
+            })
+            .then(text => {
+                try {
+                    const data = JSON.parse(text);
+                    console.log('成功加载JSON数据');
+                    renderReportDetail(data, reportId);
+                } catch (e) {
+                    console.error('JSON解析失败，文本内容:', text.substring(0, 200));
+                    tryPath(index + 1);
+                }
+            })
+            .catch(error => {
+                console.error('路径', path, '失败:', error);
+                tryPath(index + 1);
+            });
+    }
+    
+    tryPath(0);
 }
 
-// 显示报告详情
-function displayReport(report) {
-    const reportContent = document.getElementById('report-content');
-    const reportTitle = document.getElementById('report-title');
+// 渲染报告详情
+function renderReportDetail(data, reportId) {
+    const content = document.getElementById('content');
+    if (!content) return;
     
-    // 设置报告标题
-    const timestamp = new Date(report.timestamp);
-    reportTitle.textContent = `巡检报告 - ${timestamp.toLocaleString('zh-CN')}`;
+    let totalCount = 0;
+    let normalCount = 0;
+    let warnCount = 0;
+    let seriousCount = 0;
+    const alerts = [];
     
-    // 生成报告内容
-    let content = '';
+    data.servers.forEach(server => {
+        const serverInfo = server.results[0];
+        if (!serverInfo) return;
+        
+        if (serverInfo.result) {
+            totalCount += serverInfo.result.all_count || 0;
+            normalCount += serverInfo.result.normal_count || 0;
+            warnCount += serverInfo.result.warn_count || 0;
+            seriousCount += serverInfo.result.serious_count || 0;
+        }
+        
+        const serverName = server.alias || 'Unknown';
+        const serverIp = server.ip || 'Unknown';
+        
+        if (serverInfo.cpu && serverInfo.cpu.usestate !== 'normal') {
+            alerts.push({
+                server: serverName,
+                ip: serverIp,
+                message: `CPU使用率过高: ${serverInfo.cpu.usage}%`,
+                status: serverInfo.cpu.usestate
+            });
+        }
+        
+        if (serverInfo.memory && serverInfo.memory.usestate !== 'normal') {
+            alerts.push({
+                server: serverName,
+                ip: serverIp,
+                message: `内存使用率过高: ${serverInfo.memory.usage}%`,
+                status: serverInfo.memory.usestate
+            });
+        }
+        
+        if (serverInfo.disk) {
+            serverInfo.disk.forEach(disk => {
+                if (disk.usestate !== 'normal') {
+                    alerts.push({
+                        server: serverName,
+                        ip: serverIp,
+                        message: `磁盘使用率过高 - ${disk.mounted}: ${disk.usage}%`,
+                        status: disk.usestate
+                    });
+                }
+            });
+        }
+        
+        if (serverInfo.apps) {
+            serverInfo.apps.forEach(app => {
+                if (app.state !== 'running') {
+                    alerts.push({
+                        server: serverName,
+                        ip: serverIp,
+                        message: `应用 ${app.name} 状态: ${app.state}`,
+                        status: 'serious'
+                    });
+                }
+            });
+        }
+        
+        if (serverInfo.dockers) {
+            serverInfo.dockers.forEach(docker => {
+                if (docker.state !== 'running') {
+                    alerts.push({
+                        server: serverName,
+                        ip: serverIp,
+                        message: `Docker容器 ${docker.name} 状态: ${docker.state}`,
+                        status: docker.state === 'not_found' ? 'serious' : 'warn'
+                    });
+                }
+            });
+        }
+    });
     
-    // 汇总信息
-    content += `
-        <div class="summary-section">
-            <h3>巡检汇总信息</h3>
-            <div class="summary-grid">
-                <div class="summary-item">
-                    <div class="label">巡检时间</div>
-                    <div class="value">${timestamp.toLocaleString('zh-CN')}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">服务器数量</div>
-                    <div class="value">${report.servers.length}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">告警数量</div>
-                    <div class="value">${countAlarms(report)}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">严重告警</div>
-                    <div class="value">${countSeriousAlarms(report)}</div>
-                </div>
-            </div>
+    let html = `
+        <div class="summary">
+            <h2>巡检汇总信息</h2>
+            <div class="summary-item"><strong>报告生成时间:</strong> ${new Date(data.timestamp).toLocaleString('zh-CN')}</div>
+            <div class="summary-item"><strong>服务器数量:</strong> ${data.servers.length}</div>
+            <div class="summary-item"><strong>检查项:</strong> 总计 ${totalCount}</div>
+            <div class="summary-item"><strong>正常:</strong> <span class="status-pass">${normalCount}</span></div>
+            <div class="summary-item"><strong>警告:</strong> <span class="status-warn">${warnCount}</span></div>
+            <div class="summary-item"><strong>严重:</strong> <span class="status-fail">${seriousCount}</span></div>
         </div>
     `;
     
-    // 告警信息
-    const alarms = collectAlarms(report);
-    if (alarms.length > 0) {
-        content += `
-            <div class="alarm-section">
-                <h3>巡检告警信息</h3>
-                <ul class="alarm-list">
-        `;
-        alarms.forEach(alarm => {
-            content += `
-                <li class="alarm-item ${alarm.status}">
-                    <strong>${alarm.server}</strong>: ${alarm.message} (${alarm.status})
-                </li>
-            `;
-        });
-        content += `
+    if (alerts.length > 0) {
+        const hasSerious = alerts.some(a => a.status === 'serious');
+        html += `
+            <div class="alert ${hasSerious ? 'alert-danger' : 'alert-warning'}">
+                <h3>巡检告警信息 (${alerts.length}条)</h3>
+                <ul>
+                    ${alerts.map(alert => `<li><strong>[${alert.server} (${alert.ip})]</strong> ${alert.message}</li>`).join('')}
                 </ul>
             </div>
         `;
     }
     
-    // 服务器信息
-    report.servers.forEach(server => {
-        // 获取服务器信息（新结构）
+    data.servers.forEach(server => {
         const serverInfo = server.results[0];
         if (!serverInfo) return;
         
-        content += `
-            <div class="service-section">
-                <h3>服务信息 - ${server.alias} (${server.ip})</h3>
-                <p>巡检时间: ${serverInfo.time}</p>
+        const serverName = server.alias || 'Unknown';
+        const serverIp = server.ip || 'Unknown';
+        
+        html += `
+            <div class="server-section">
+                <div class="server-header">服务器: ${serverName} (${serverIp})</div>
+                <table>
+                    <tr>
+                        <th>检查项</th>
+                        <th>详情</th>
+                        <th>状态</th>
+                    </tr>
+        `;
+        
+        if (serverInfo.os) {
+            html += `
+                <tr>
+                    <td>操作系统</td>
+                    <td>${serverInfo.os}</td>
+                    <td><span class="status-pass">正常</span></td>
+                </tr>
+            `;
+        }
+        
+        if (serverInfo.uptimesince) {
+            html += `
+                <tr>
+                    <td>系统启动时间</td>
+                    <td>${serverInfo.uptimesince}</td>
+                    <td><span class="status-pass">正常</span></td>
+                </tr>
+            `;
+        }
+        
+        if (serverInfo.cpu) {
+            let statusClass = 'status-pass';
+            if (serverInfo.cpu.usestate === 'warn') statusClass = 'status-warn';
+            if (serverInfo.cpu.usestate === 'serious') statusClass = 'status-fail';
+            
+            html += `
+                <tr>
+                    <td>CPU使用率</td>
+                    <td>使用率: ${serverInfo.cpu.usage}% | 平均负载: ${serverInfo.cpu.avgload}</td>
+                    <td><span class="${statusClass}">${serverInfo.cpu.usestate}</span></td>
+                </tr>
+            `;
+        }
+        
+        if (serverInfo.memory) {
+            let statusClass = 'status-pass';
+            if (serverInfo.memory.usestate === 'warn') statusClass = 'status-warn';
+            if (serverInfo.memory.usestate === 'serious') statusClass = 'status-fail';
+            
+            html += `
+                <tr>
+                    <td>内存使用</td>
+                    <td>已用: ${serverInfo.memory.used}MB / 总量: ${serverInfo.memory.total}MB (${serverInfo.memory.usage}%)</td>
+                    <td><span class="${statusClass}">${serverInfo.memory.usestate}</span></td>
+                </tr>
+            `;
+        }
+        
+        if (serverInfo.disk && serverInfo.disk.length > 0) {
+            serverInfo.disk.forEach((disk, index) => {
+                let statusClass = 'status-pass';
+                if (disk.usestate === 'warn') statusClass = 'status-warn';
+                if (disk.usestate === 'serious') statusClass = 'status-fail';
                 
-                <!-- 系统信息 -->
-                <div class="card">
-                    <h4>系统信息</h4>
-                    <table>
-                        <tr>
-                            <th>项目</th>
-                            <th>值</th>
-                        </tr>
-                        <tr>
-                            <td>主机名</td>
-                            <td>${serverInfo.hostname}</td>
-                        </tr>
-                        <tr>
-                            <td>IP地址</td>
-                            <td>${serverInfo.hostip}</td>
-                        </tr>
-                        <tr>
-                            <td>操作系统</td>
-                            <td>${serverInfo.os}</td>
-                        </tr>
-                        <tr>
-                            <td>系统启动时间</td>
-                            <td>${serverInfo.uptimesince}</td>
-                        </tr>
-                        <tr>
-                            <td>运行时长</td>
-                            <td>${serverInfo.uptimeduration}</td>
-                        </tr>
-                    </table>
-                </div>
+                html += `
+                    <tr>
+                        <td>磁盘 ${disk.mounted}</td>
+                        <td>已用: ${disk.used} / 总量: ${disk.total} (${disk.usage}%)</td>
+                        <td><span class="${statusClass}">${disk.usestate}</span></td>
+                    </tr>
+                `;
+            });
+        }
+        
+        if (serverInfo.apps && serverInfo.apps.length > 0) {
+            serverInfo.apps.forEach(app => {
+                let statusClass = app.state === 'running' ? 'status-pass' : 'status-fail';
                 
-                <!-- 资源信息 -->
-                <div class="card">
-                    <h4>资源信息</h4>
-                    
-                    <h5>CPU信息</h5>
-                    <table>
-                        <tr>
-                            <th>项目</th>
-                            <th>值</th>
-                            <th>状态</th>
-                        </tr>
-                        <tr>
-                            <td>使用率</td>
-                            <td>${serverInfo.cpu.usage}${serverInfo.cpu.usage ? '%' : ''}</td>
-                            <td class="status-${serverInfo.cpu.usestate}">
-                                ${serverInfo.cpu.usestate}
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>系统使用率</td>
-                            <td>${serverInfo.cpu.sysusage}%</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>空闲率</td>
-                            <td>${serverInfo.cpu.idle}%</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>IO等待</td>
-                            <td>${serverInfo.cpu.iowait}%</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>平均负载</td>
-                            <td>${serverInfo.cpu.avgload}</td>
-                            <td></td>
-                        </tr>
-                    </table>
-                    
-                    <h5>内存信息</h5>
-                    <table>
-                        <tr>
-                            <th>项目</th>
-                            <th>值</th>
-                            <th>状态</th>
-                        </tr>
-                        <tr>
-                            <td>总内存</td>
-                            <td>${serverInfo.memory.total}MB</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>已用内存</td>
-                            <td>${serverInfo.memory.used}MB</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>空闲内存</td>
-                            <td>${serverInfo.memory.free}MB</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>可用内存</td>
-                            <td>${serverInfo.memory.available}MB</td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td>使用率</td>
-                            <td>${serverInfo.memory.usage}${serverInfo.memory.usage ? '%' : ''}</td>
-                            <td class="status-${serverInfo.memory.usestate}">
-                                ${serverInfo.memory.usestate}
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>交换空间</td>
-                            <td>${serverInfo.memory.swaptotal}MB / 已用: ${serverInfo.memory.swapused}MB / 空闲: ${serverInfo.memory.swapfree}MB</td>
-                            <td class="status-${serverInfo.memory.swapusestate}">
-                                ${serverInfo.memory.swapusestate}
-                            </td>
-                        </tr>
-                    </table>
-                    
-                    <h5>磁盘信息</h5>
-                    <table>
-                        <tr>
-                            <th>挂载点</th>
-                            <th>文件系统</th>
-                            <th>总大小</th>
-                            <th>已用</th>
-                            <th>可用</th>
-                            <th>使用率</th>
-                            <th>状态</th>
-                        </tr>
-                        ${serverInfo.disk.map(disk => `
-                            <tr>
-                                <td>${disk.mounted}</td>
-                                <td>${disk.filesystem}</td>
-                                <td>${disk.total}</td>
-                                <td>${disk.used}</td>
-                                <td>${disk.available}</td>
-                                <td>${disk.usage}${disk.usage ? '%' : ''}</td>
-                                <td class="status-${disk.usestate}">
-                                    ${disk.usestate}
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </table>
-                </div>
+                html += `
+                    <tr>
+                        <td>应用 ${app.name}</td>
+                        <td>状态: ${app.state} | PID: ${app.pid || '-'} | CPU: ${app.cpuusage || '-'}% | MEM: ${app.memusage || '-'}%</td>
+                        <td><span class="${statusClass}">${app.state}</span></td>
+                    </tr>
+                `;
+            });
+        }
+        
+        if (serverInfo.dockers && serverInfo.dockers.length > 0) {
+            serverInfo.dockers.forEach(docker => {
+                let statusClass = docker.state === 'running' ? 'status-pass' : 'status-fail';
                 
-                <!-- 应用状态 -->
-                <div class="card">
-                    <h4>应用状态</h4>
-                    <table>
-                        <tr>
-                            <th>应用名称</th>
-                            <th>类型</th>
-                            <th>用户</th>
-                            <th>进程ID</th>
-                            <th>状态</th>
-                            <th>CPU使用率</th>
-                            <th>内存使用率</th>
-                            <th>运行时长</th>
-                        </tr>
-                        ${serverInfo.apps.length > 0 ? 
-                            serverInfo.apps.map(app => `
-                                <tr>
-                                    <td>${app.name}</td>
-                                    <td>${app.type}</td>
-                                    <td>${app.user || 'N/A'}</td>
-                                    <td>${app.pid || 'N/A'}</td>
-                                    <td class="${app.state === 'running' ? 'status-normal' : 'status-serious'}">${app.state}</td>
-                                    <td>${app.cpuusage || 'N/A'}%</td>
-                                    <td>${app.memusage || 'N/A'}%</td>
-                                    <td>${app.runtime || 'N/A'}</td>
-                                </tr>
-                            `).join('') : 
-                            '<tr><td colspan="8">无应用</td></tr>'
-                        }
-                    </table>
-                </div>
-                
-                <!-- Docker容器状态 -->
-                <div class="card">
-                    <h4>Docker容器状态</h4>
-                    <table>
-                        <tr>
-                            <th>容器名称</th>
-                            <th>容器ID</th>
-                            <th>状态</th>
-                            <th>详细状态</th>
-                        </tr>
-                        ${serverInfo.dockers.length > 0 ? 
-                            serverInfo.dockers.map(container => {
-                                let statusClass = '';
-                                if (container.state === 'running') {
-                                    statusClass = 'status-normal';
-                                } else if (container.state === 'not_found') {
-                                    statusClass = 'status-serious';
-                                } else {
-                                    statusClass = 'status-alarm';
-                                }
-                                
-                                return `
-                                    <tr>
-                                        <td>${container.name}</td>
-                                        <td>${container.id || 'N/A'}</td>
-                                        <td class="${statusClass}">${container.state}</td>
-                                        <td>${container.status || 'N/A'}</td>
-                                    </tr>
-                                `;
-                            }).join('') : 
-                            '<tr><td colspan="4">无容器</td></tr>'
-                        }
-                    </table>
-                </div>
-                
-                <!-- 巡检结果 -->
-                <div class="card">
-                    <h4>巡检结果</h4>
-                    <table>
-                        <tr>
-                            <th>项目</th>
-                            <th>值</th>
-                        </tr>
-                        <tr>
-                            <td>总检查项</td>
-                            <td>${serverInfo.result.all_count}</td>
-                        </tr>
-                        <tr>
-                            <td>正常</td>
-                            <td>${serverInfo.result.normal_count}</td>
-                        </tr>
-                        <tr>
-                            <td>警告</td>
-                            <td>${serverInfo.result.warn_count}</td>
-                        </tr>
-                        <tr>
-                            <td>严重</td>
-                            <td>${serverInfo.result.serious_count}</td>
-                        </tr>
-                        <tr>
-                            <td>状态描述</td>
-                            <td>${serverInfo.result.description}</td>
-                        </tr>
-                    </table>
-                </div>
+                html += `
+                    <tr>
+                        <td>Docker容器 ${docker.name}</td>
+                        <td>状态: ${docker.state} | ID: ${docker.id || '-'}</td>
+                        <td><span class="${statusClass}">${docker.state}</span></td>
+                    </tr>
+                `;
+            });
+        }
+        
+        html += `
+                </table>
             </div>
         `;
     });
     
-    reportContent.innerHTML = content;
+    content.innerHTML = html;
 }
 
-// 统计告警数量
-function countAlarms(report) {
-    let count = 0;
-    report.servers.forEach(server => {
-        const serverInfo = server.results[0];
-        if (!serverInfo) return;
-        
-        if (serverInfo.cpu.usestate !== 'normal') count++;
-        if (serverInfo.memory.usestate !== 'normal') count++;
-        if (serverInfo.memory.swapusestate !== 'normal') count++;
-        serverInfo.disk.forEach(disk => {
-            if (disk.usestate !== 'normal') count++;
-        });
-        serverInfo.apps.forEach(app => {
-            if (app.state !== 'running') count++;
-        });
-        serverInfo.dockers.forEach(container => {
-            if (container.state !== 'running') count++;
-        });
-    });
-    return count;
+// 加载趋势数据
+function loadTrendData() {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <h2>巡检趋势分析</h2>
+        <div class="chart-container">
+            <h3>资源使用趋势</h3>
+            <canvas id="resourceChart" width="800" height="400"></canvas>
+        </div>
+        <div class="chart-container">
+            <h3>告警趋势</h3>
+            <canvas id="alertChart" width="800" height="400"></canvas>
+        </div>
+    `;
+    
+    const mockTrendData = {
+        dates: ['2026-04-19', '2026-04-20', '2026-04-21'],
+        cpuUsage: [12, 8, 6.5],
+        memoryUsage: [15, 13, 12.2],
+        diskUsage: [7, 6, 6],
+        alertCount: [5, 4, 4]
+    };
+    
+    drawResourceChart(mockTrendData);
+    drawAlertChart(mockTrendData);
 }
 
-// 统计严重告警数量
-function countSeriousAlarms(report) {
-    let count = 0;
-    report.servers.forEach(server => {
-        const serverInfo = server.results[0];
-        if (!serverInfo) return;
+// 绘制资源使用趋势图
+function drawResourceChart(data) {
+    const canvas = document.getElementById('resourceChart');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = 60;
+    
+    ctx.clearRect(0, 0, width, height);
+    
+    const xScale = (width - padding * 2) / (data.dates.length - 1);
+    const yScale = (height - padding * 2) / 100;
+    
+    ctx.beginPath();
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+        const y = padding + i * (height - padding * 2) / 5;
+        ctx.moveTo(padding, y);
+        ctx.lineTo(width - padding, y);
+    }
+    ctx.stroke();
+    
+    ctx.beginPath();
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 2;
+    ctx.moveTo(padding, padding);
+    ctx.lineTo(padding, height - padding);
+    ctx.lineTo(width - padding, height - padding);
+    ctx.stroke();
+    
+    const colors = ['#667eea', '#10b981', '#f59e0b'];
+    const labels = ['CPU使用率', '内存使用率', '磁盘使用率'];
+    const datasets = [data.cpuUsage, data.memoryUsage, data.diskUsage];
+    
+    datasets.forEach((dataset, dataIndex) => {
+        ctx.beginPath();
+        ctx.strokeStyle = colors[dataIndex];
+        ctx.lineWidth = 3;
         
-        if (serverInfo.cpu.usestate === 'serious') count++;
-        if (serverInfo.memory.usestate === 'serious') count++;
-        if (serverInfo.memory.swapusestate === 'serious') count++;
-        serverInfo.disk.forEach(disk => {
-            if (disk.usestate === 'serious') count++;
+        dataset.forEach((value, index) => {
+            const x = padding + index * xScale;
+            const y = height - padding - value * yScale;
+            
+            if (index === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
         });
-        serverInfo.apps.forEach(app => {
-            if (app.state !== 'running') count++;
-        });
-        serverInfo.dockers.forEach(container => {
-            if (container.state === 'not_found') count++;
-        });
-    });
-    return count;
-}
-
-// 收集告警信息
-function collectAlarms(report) {
-    const alarms = [];
-    report.servers.forEach(server => {
-        const serverInfo = server.results[0];
-        if (!serverInfo) return;
         
-        if (serverInfo.cpu.usestate !== 'normal') {
-            alarms.push({
-                server: server.alias,
-                message: `CPU使用率过高 (${serverInfo.cpu.usage}%)`,
-                status: serverInfo.cpu.usestate
-            });
-        }
-        if (serverInfo.memory.usestate !== 'normal') {
-            alarms.push({
-                server: server.alias,
-                message: `内存使用率过高 (${serverInfo.memory.usage}%)`,
-                status: serverInfo.memory.usestate
-            });
-        }
-        if (serverInfo.memory.swapusestate !== 'normal') {
-            alarms.push({
-                server: server.alias,
-                message: `交换空间使用率过高`,
-                status: serverInfo.memory.swapusestate
-            });
-        }
-        serverInfo.disk.forEach(disk => {
-            if (disk.usestate !== 'normal') {
-                alarms.push({
-                    server: server.alias,
-                    message: `磁盘使用率过高 - ${disk.mounted} (${disk.usage}%)`,
-                    status: disk.usestate
-                });
-            }
-        });
-        serverInfo.apps.forEach(app => {
-            if (app.state !== 'running') {
-                alarms.push({
-                    server: server.alias,
-                    message: `应用 ${app.name} 未运行`,
-                    status: 'serious'
-                });
-            }
-        });
-        serverInfo.dockers.forEach(container => {
-            if (container.state !== 'running') {
-                alarms.push({
-                    server: server.alias,
-                    message: `容器 ${container.name} 状态异常 (${container.state})`,
-                    status: container.state === 'not_found' ? 'serious' : 'alarm'
-                });
-            }
-        });
-    });
-    return alarms;
-}
-
-// 初始化图表
-function initCharts() {
-    // 销毁旧图表
-    Object.values(charts).forEach(chart => chart.destroy());
-    
-    // 初始化 CPU 图表
-    const cpuCtx = document.getElementById('cpu-chart').getContext('2d');
-    charts.cpu = new Chart(cpuCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'CPU 使用率 (%)',
-                data: [],
-                borderColor: '#4361ee',
-                backgroundColor: 'rgba(67, 97, 238, 0.1)',
-                tension: 0.3,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100
-                }
-            }
-        }
-    });
-    
-    // 初始化内存图表
-    const memCtx = document.getElementById('mem-chart').getContext('2d');
-    charts.mem = new Chart(memCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: '内存使用率 (%)',
-                data: [],
-                borderColor: '#3a0ca3',
-                backgroundColor: 'rgba(58, 12, 163, 0.1)',
-                tension: 0.3,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100
-                }
-            }
-        }
-    });
-    
-    // 初始化磁盘图表
-    const diskCtx = document.getElementById('disk-chart').getContext('2d');
-    charts.disk = new Chart(diskCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: '磁盘使用率 (%)',
-                data: [],
-                borderColor: '#7209b7',
-                backgroundColor: 'rgba(114, 9, 183, 0.1)',
-                tension: 0.3,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100
-                }
-            }
-        }
-    });
-    
-    // 初始化告警图表
-    const alarmCtx = document.getElementById('alarm-chart').getContext('2d');
-    charts.alarm = new Chart(alarmCtx, {
-        type: 'bar',
-        data: {
-            labels: [],
-            datasets: [{
-                label: '告警数量',
-                data: [],
-                backgroundColor: '#f72585',
-            }, {
-                label: '严重告警',
-                data: [],
-                backgroundColor: '#4cc9f0',
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true
-                }
-            }
-        }
-    });
-}
-
-// 生成趋势
-function generateTrend() {
-    const period = document.getElementById('trend-period').value;
-    
-    // 模拟趋势数据
-    const labels = [];
-    const cpuData = [];
-    const memData = [];
-    const diskData = [];
-    const alarmData = [];
-    const seriousData = [];
-    
-    // 生成模拟数据
-    for (let i = 7; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
+        ctx.stroke();
         
-        if (period === 'day') {
-            labels.push(date.toLocaleDateString('zh-CN'));
-        } else if (period === 'week') {
-            labels.push(`第${Math.floor(date.getDay()/7)+1}周`);
-        } else {
-            labels.push(`${date.getMonth()+1}月`);
-        }
-        
-        cpuData.push(Math.random() * 100);
-        memData.push(Math.random() * 100);
-        diskData.push(Math.random() * 100);
-        alarmData.push(Math.floor(Math.random() * 5));
-        seriousData.push(Math.floor(Math.random() * 3));
+        dataset.forEach((value, index) => {
+            const x = padding + index * xScale;
+            const y = height - padding - value * yScale;
+            
+            ctx.beginPath();
+            ctx.fillStyle = colors[dataIndex];
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    });
+    
+    ctx.fillStyle = '#374151';
+    ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    data.dates.forEach((date, index) => {
+        const x = padding + index * xScale;
+        ctx.fillText(date, x, height - 20);
+    });
+    
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 100; i += 20) {
+        const y = height - padding - i * yScale;
+        ctx.fillText(i + '%', padding - 10, y + 5);
     }
     
-    // 更新图表数据
-    charts.cpu.data.labels = labels;
-    charts.cpu.data.datasets[0].data = cpuData;
-    charts.cpu.update();
-    
-    charts.mem.data.labels = labels;
-    charts.mem.data.datasets[0].data = memData;
-    charts.mem.update();
-    
-    charts.disk.data.labels = labels;
-    charts.disk.data.datasets[0].data = diskData;
-    charts.disk.update();
-    
-    charts.alarm.data.labels = labels;
-    charts.alarm.data.datasets[0].data = alarmData;
-    charts.alarm.data.datasets[1].data = seriousData;
-    charts.alarm.update();
+    ctx.textAlign = 'left';
+    labels.forEach((label, index) => {
+        ctx.fillStyle = colors[index];
+        ctx.fillRect(padding + index * 150, 20, 20, 20);
+        ctx.fillStyle = '#374151';
+        ctx.fillText(label, padding + 25 + index * 150, 35);
+    });
 }
 
-// 页面加载完成后初始化
-window.addEventListener('DOMContentLoaded', initPage);
+// 绘制告警趋势图
+function drawAlertChart(data) {
+    const canvas = document.getElementById('alertChart');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = 60;
+    
+    ctx.clearRect(0, 0, width, height);
+    
+    const barWidth = (width - padding * 2) / data.dates.length * 0.6;
+    const maxAlert = Math.max(...data.alertCount, 1);
+    const yScale = (height - padding * 2) / maxAlert;
+    
+    ctx.beginPath();
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 2;
+    ctx.moveTo(padding, padding);
+    ctx.lineTo(padding, height - padding);
+    ctx.lineTo(width - padding, height - padding);
+    ctx.stroke();
+    
+    data.alertCount.forEach((count, index) => {
+        const x = padding + (index * (width - padding * 2) / data.dates.length) + (barWidth * 0.2);
+        const barHeight = count * yScale;
+        const y = height - padding - barHeight;
+        
+        const gradient = ctx.createLinearGradient(x, y, x, height - padding);
+        gradient.addColorStop(0, '#667eea');
+        gradient.addColorStop(1, '#764ba2');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, y, barWidth, barHeight);
+        
+        ctx.fillStyle = '#1f2937';
+        ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(count, x + barWidth / 2, y - 10);
+        
+        ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.fillText(data.dates[index], x + barWidth / 2, height - 25);
+    });
+    
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#374151';
+    for (let i = 0; i <= maxAlert; i++) {
+        const y = height - padding - i * yScale;
+        ctx.fillText(i.toString(), padding - 10, y + 5);
+    }
+}

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patrol 巡检趋势</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Patrol 系统巡检报告</h1>
+        <div class="nav">
+            <a href="index.html">巡检日期列表</a>
+            <a href="trend.html" class="active">巡检趋势</a>
+        </div>
+        <div id="content" class="content">
+            <h2>巡检趋势分析</h2>
+            <div class="chart-container">
+                <h3>资源使用趋势</h3>
+                <canvas id="resourceChart" width="800" height="400"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>告警趋势</h3>
+                <canvas id="alertChart" width="800" height="400"></canvas>
+            </div>
+        </div>
+    </div>
+    <script src="js/main.js"></script>
+</body>
+</html>
