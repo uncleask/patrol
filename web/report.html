@@ -3,19 +3,430 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Patrol 巡检报告详情</title>
+    <title>Patrol 系统巡检报告</title>
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .header .date {
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .header .report-date {
+            color: #666;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .stat-item {
+            flex: 1;
+            min-width: 200px;
+            text-align: center;
+            padding: 25px 20px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border: 1px solid #e0e7ff;
+            transition: transform 0.3s ease;
+        }
+        .stat-item:hover {
+            transform: translateY(-3px);
+        }
+        .stat-item .value {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .stat-item .label {
+            color: #666;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .stat-item:nth-child(1) .value {
+            color: #374151;
+        }
+        .stat-item:nth-child(2) .value {
+            color: #10b981;
+        }
+        .stat-item:nth-child(3) .value {
+            color: #f59e0b;
+        }
+        .stat-item:nth-child(4) .value {
+            color: #ef4444;
+        }
+        .alerts {
+            margin-bottom: 30px;
+            padding: 25px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .alerts h2 {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #374151;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .alert-item {
+            margin-bottom: 12px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #f59e0b;
+            border-radius: 0 8px 8px 0;
+            border: 1px solid #fde68a;
+            border-left-width: 4px;
+            transition: all 0.3s ease;
+        }
+        .alert-item:hover {
+            background-color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .alert-item .host {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+        .alert-item .messages {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+        .host-section {
+            margin-bottom: 40px;
+            padding: 30px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .host-section h2 {
+            font-size: 20px;
+            margin-bottom: 25px;
+            color: #374151;
+            border-bottom: 3px solid #ddd;
+            padding-bottom: 12px;
+        }
+        .host-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 25px;
+            padding: 20px;
+            background-color: #f0f4ff;
+            border-radius: 8px;
+            border: 1px solid #c7d2fe;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .host-info-item {
+            flex: 1;
+            min-width: 150px;
+        }
+        .host-info-item .label {
+            font-size: 12px;
+            color: #60a5fa;
+            margin-bottom: 8px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .host-info-item .value {
+            font-size: 15px;
+            font-weight: bold;
+            color: #374151;
+        }
+        .status-cards {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .status-card {
+            flex: 1;
+            min-width: 250px;
+            padding: 25px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .status-card h3 {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #374151;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .status-item {
+            margin-bottom: 15px;
+        }
+        .status-item .label {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+        .status-item .value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #374151;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #f3f4f6;
+            border-radius: 5px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+        .progress-bar .progress {
+            height: 100%;
+            border-radius: 5px;
+            transition: width 0.5s ease;
+        }
+        .progress-green {
+            background-color: #10b981;
+        }
+        .progress-yellow {
+            background-color: #f59e0b;
+        }
+        .progress-red {
+            background-color: #ef4444;
+        }
+        .service-list {
+            margin-bottom: 25px;
+        }
+        .service-list h3 {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #374151;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .service-table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .service-table th,
+        .service-table td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e0e7ff;
+        }
+        .service-table th {
+            background-color: #e5e7eb;
+            color: #333;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .service-table td {
+            font-size: 14px;
+            color: #4b5563;
+            background: #fff;
+        }
+        .service-table tbody tr:hover td {
+            background: #f8f9fa;
+        }
+        .status-running {
+            color: #10b981;
+            font-weight: bold;
+        }
+        .status-stopped,
+        .status-not_found {
+            color: #ef4444;
+            font-weight: bold;
+        }
+        .status-warn {
+            color: #f59e0b;
+            font-weight: bold;
+        }
+        .status-exited {
+            color: #60a5fa;
+            font-weight: bold;
+        }
+        .docker-list {
+            margin-bottom: 25px;
+        }
+        .docker-list h3 {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #374151;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .docker-table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .docker-table th,
+        .docker-table td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e0e7ff;
+        }
+        .docker-table th {
+            background-color: #e5e7eb;
+            color: #333;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .docker-table td {
+            font-size: 14px;
+            color: #4b5563;
+            background: #fff;
+        }
+        .docker-table tbody tr:hover td {
+            background: #f8f9fa;
+        }
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 25px;
+            color: #60a5fa;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 15px;
+            padding: 10px 20px;
+            background-color: #f0f4ff;
+            border-radius: 8px;
+            border: 1px solid #c7d2fe;
+            transition: all 0.3s ease;
+        }
+        .back-link:hover {
+            background-color: #e0e7ff;
+            border-color: #93c5fd;
+            transform: translateX(-3px);
+        }
+        .result-card {
+            margin-bottom: 25px;
+            padding: 25px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border: 1px solid #e0e7ff;
+        }
+        .result-card h3 {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #374151;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .result-card .result-item {
+            margin-bottom: 12px;
+            font-size: 15px;
+            color: #374151;
+        }
+        .result-card .result-item strong {
+            color: #60a5fa;
+        }
+        .result-card .result-description {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #fef3c7;
+            border-radius: 8px;
+            color: #92400e;
+            font-weight: 500;
+            border: 1px solid #fde68a;
+        }
+        @media (max-width: 768px) {
+            .stats {
+                flex-direction: column;
+            }
+            .stat-item {
+                margin: 0;
+            }
+            .status-cards {
+                flex-direction: column;
+            }
+            .status-card {
+                margin: 0;
+            }
+            .host-info {
+                flex-direction: column;
+            }
+            .service-table,
+            .docker-table {
+                font-size: 12px;
+            }
+            .service-table th,
+            .service-table td,
+            .docker-table th,
+            .docker-table td {
+                padding: 10px 8px;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Patrol 系统巡检报告</h1>
-        <div class="nav">
-            <a href="index.html">巡检日期列表</a>
-            <a href="trend.html">巡检趋势</a>
+        <a href="index.html" class="back-link">← 返回报告列表</a>
+        
+        <div class="header">
+            <h1>Patrol 系统巡检报告</h1>
+            <div class="date" id="report-time">2026/04/16 12:00:00</div>
+            <div class="report-date" id="report-date">巡检报告日期: 2026年04月16日</div>
         </div>
-        <div id="content" class="content">
-            <h2>巡检结果</h2>
-            <p>正在加载报告详情...</p>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="value" id="total-checks">0</div>
+                <div class="label">巡检总量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="normal-checks">0</div>
+                <div class="label">正常数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="warning-checks">0</div>
+                <div class="label">告警数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="error-checks">0</div>
+                <div class="label">严重告警数量</div>
+            </div>
+        </div>
+        
+        <div class="alerts">
+            <h2>告警信息</h2>
+            <div id="alert-list">
+                <p>暂无告警信息</p>
+            </div>
+        </div>
+        
+        <div id="hosts-section">
+            <!-- 主机信息将通过JavaScript动态添加 -->
         </div>
     </div>
     <script src="js/main.js"></script>
