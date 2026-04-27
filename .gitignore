@@ -9,3 +9,12 @@ logs/
 
 # Output reports
 output/
+
+# data reports
+web/data
+
+
+# conf
+conf/servers_local.conf
+conf/servers_passwd.conf
+conf/servers_proxy.conf
