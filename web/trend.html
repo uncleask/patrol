@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patrol 巡检趋势</title>
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        .chart-container {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .chart-container h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        canvas {
+            max-width: 100%;
+            height: 400px;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -26,5 +42,295 @@
         </div>
     </div>
     <script src="js/main.js"></script>
+    <script>
+        // 加载趋势数据
+        function loadTrendData() {
+            // 从 data 目录加载实际的巡检报告
+            fetch('./data/reports.json')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('无法加载报告数据');
+                    }
+                    return response.json();
+                })
+                .then(reports => {
+                    if (reports && reports.length > 0) {
+                        // 加载每个报告文件
+                        const reportPromises = reports.map(report => {
+                            return fetch(`./data/${report.file}?t=${new Date().getTime()}`)
+                                .then(response => response.json())
+                                .then(reportData => {
+                                    return {
+                                        date: report.date,
+                                        time: report.time,
+                                        servers: reportData
+                                    };
+                                })
+                                .catch(error => {
+                                    console.error('加载报告文件失败:', error);
+                                    return null;
+                                });
+                        });
+
+                        Promise.all(reportPromises)
+                            .then(reportData => {
+                                // 过滤掉加载失败的报告
+                                const validReports = reportData.filter(report => report !== null);
+                                
+                                if (validReports.length > 0) {
+                                    // 处理数据生成趋势
+                                    const trendData = processTrendData(validReports);
+                                    renderTrendData(trendData);
+                                } else {
+                                    // 显示无数据提示
+                                    showNoDataMessage();
+                                }
+                            })
+                            .catch(error => {
+                                console.error('处理报告数据失败:', error);
+                                showErrorMessage('处理报告数据失败');
+                            });
+                    } else {
+                        // 显示无数据提示
+                        showNoDataMessage();
+                    }
+                })
+                .catch(error => {
+                    console.error('加载趋势数据失败:', error);
+                    // 显示错误提示
+                    showErrorMessage('加载趋势数据失败，请确保 reports.json 文件存在');
+                });
+        }
+        
+        // 显示无数据提示
+        function showNoDataMessage() {
+            const content = document.getElementById('content');
+            if (content) {
+                content.innerHTML = `
+                    <h2>巡检趋势分析</h2>
+                    <div class="chart-container">
+                        <h3>资源使用趋势</h3>
+                        <div style="text-align: center; padding: 100px; color: #999;">
+                            暂无巡检数据
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <h3>告警趋势</h3>
+                        <div style="text-align: center; padding: 100px; color: #999;">
+                            暂无巡检数据
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        // 显示错误提示
+        function showErrorMessage(message) {
+            const content = document.getElementById('content');
+            if (content) {
+                content.innerHTML = `
+                    <h2>巡检趋势分析</h2>
+                    <div class="chart-container">
+                        <h3>资源使用趋势</h3>
+                        <div style="text-align: center; padding: 100px; color: #f44336;">
+                            ${message}
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <h3>告警趋势</h3>
+                        <div style="text-align: center; padding: 100px; color: #f44336;">
+                            ${message}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        // 处理趋势数据
+        function processTrendData(reports) {
+            // 按日期排序报告
+            reports.sort((a, b) => new Date(a.date) - new Date(b.date));
+            
+            const dates = [];
+            const cpuUsage = [];
+            const memoryUsage = [];
+            const diskUsage = [];
+            const alertCount = [];
+            
+            reports.forEach(report => {
+                dates.push(report.date);
+                
+                // 计算平均 CPU 使用率
+                const cpuAvg = report.servers.reduce((sum, server) => {
+                    return sum + parseFloat(server.cpu.usage || 0);
+                }, 0) / report.servers.length;
+                cpuUsage.push(Math.round(cpuAvg * 100) / 100);
+                
+                // 计算平均内存使用率
+                const memAvg = report.servers.reduce((sum, server) => {
+                    return sum + parseFloat(server.memory.usage || 0);
+                }, 0) / report.servers.length;
+                memoryUsage.push(Math.round(memAvg * 100) / 100);
+                
+                // 计算平均磁盘使用率
+                const diskAvg = report.servers.reduce((sum, server) => {
+                    if (server.disk && server.disk.length > 0) {
+                        const diskUsage = server.disk.reduce((diskSum, disk) => {
+                            return diskSum + parseInt(disk.usage || 0);
+                        }, 0) / server.disk.length;
+                        return sum + diskUsage;
+                    }
+                    return sum;
+                }, 0) / report.servers.length;
+                diskUsage.push(Math.round(diskAvg * 100) / 100);
+                
+                // 计算告警数量
+                const alerts = report.servers.reduce((sum, server) => {
+                    return sum + (server.result.warn_count || 0) + (server.result.serious_count || 0);
+                }, 0);
+                alertCount.push(alerts);
+            });
+            
+            return {
+                dates,
+                cpuUsage,
+                memoryUsage,
+                diskUsage,
+                alertCount
+            };
+        }
+        
+        // 渲染趋势数据
+        function renderTrendData(data) {
+            // 绘制资源使用趋势图
+            drawResourceChart(data);
+            // 绘制告警趋势图
+            drawAlertChart(data);
+        }
+        
+        // 绘制资源使用趋势图
+        function drawResourceChart(data) {
+            const canvas = document.getElementById('resourceChart');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制坐标轴
+            ctx.beginPath();
+            ctx.moveTo(50, 350);
+            ctx.lineTo(750, 350);
+            ctx.lineTo(745, 345);
+            ctx.moveTo(750, 350);
+            ctx.lineTo(745, 355);
+            ctx.moveTo(50, 350);
+            ctx.lineTo(50, 50);
+            ctx.lineTo(45, 55);
+            ctx.moveTo(50, 50);
+            ctx.lineTo(55, 55);
+            ctx.stroke();
+            
+            // 绘制数据点和线条
+            const colors = ['#4CAF50', '#2196F3', '#FF9800'];
+            const labels = ['CPU使用率', '内存使用率', '磁盘使用率'];
+            const datasets = [data.cpuUsage, data.memoryUsage, data.diskUsage];
+            
+            for (let i = 0; i < datasets.length; i++) {
+                ctx.beginPath();
+                ctx.strokeStyle = colors[i];
+                ctx.lineWidth = 2;
+                
+                for (let j = 0; j < datasets[i].length; j++) {
+                    const x = 50 + (j * (700 / (datasets[i].length - 1)));
+                    const y = 350 - (datasets[i][j] * 3);
+                    
+                    if (j === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                    
+                    // 绘制数据点
+                    ctx.fillStyle = colors[i];
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                ctx.stroke();
+                
+                // 绘制图例
+                ctx.fillStyle = colors[i];
+                ctx.fillRect(600, 50 + (i * 20), 15, 15);
+                ctx.fillStyle = '#333';
+                ctx.font = '12px Arial';
+                ctx.fillText(labels[i], 620, 62 + (i * 20));
+            }
+            
+            // 绘制X轴标签
+            ctx.font = '12px Arial';
+            ctx.fillStyle = '#333';
+            data.dates.forEach((date, index) => {
+                const x = 50 + (index * (700 / (data.dates.length - 1)));
+                ctx.fillText(date, x - 20, 375);
+            });
+            
+            // 绘制Y轴标签
+            for (let i = 0; i <= 100; i += 20) {
+                const y = 350 - (i * 3);
+                ctx.fillText(i + '%', 20, y + 4);
+            }
+        }
+        
+        // 绘制告警趋势图
+        function drawAlertChart(data) {
+            const canvas = document.getElementById('alertChart');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制坐标轴
+            ctx.beginPath();
+            ctx.moveTo(50, 350);
+            ctx.lineTo(750, 350);
+            ctx.lineTo(745, 345);
+            ctx.moveTo(750, 350);
+            ctx.lineTo(745, 355);
+            ctx.moveTo(50, 350);
+            ctx.lineTo(50, 50);
+            ctx.lineTo(45, 55);
+            ctx.moveTo(50, 50);
+            ctx.lineTo(55, 55);
+            ctx.stroke();
+            
+            // 绘制柱状图
+            const barWidth = 700 / data.dates.length * 0.8;
+            
+            data.dates.forEach((date, index) => {
+                const x = 50 + (index * (700 / data.dates.length)) + (barWidth * 0.1);
+                const height = data.alertCount[index] * 50;
+                const y = 350 - height;
+                
+                ctx.fillStyle = '#f44336';
+                ctx.fillRect(x, y, barWidth, height);
+                
+                // 绘制数值
+                ctx.fillStyle = '#333';
+                ctx.font = '12px Arial';
+                ctx.fillText(data.alertCount[index], x + barWidth / 2 - 5, y - 5);
+                
+                // 绘制日期
+                ctx.fillText(date, x + barWidth / 2 - 20, 375);
+            });
+            
+            // 绘制Y轴标签
+            for (let i = 0; i <= Math.max(...data.alertCount); i++) {
+                const y = 350 - (i * 50);
+                ctx.fillText(i, 20, y + 4);
+            }
+        }
+        
+        // 页面加载完成后加载趋势数据
+        window.onload = loadTrendData;
+    </script>
 </body>
 </html>

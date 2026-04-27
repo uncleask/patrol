@@ -1,14 +1,14 @@
-# 检查组配置文件
-# 格式: 组标签:检查项1,检查项2,...
-# 示例:
-# web:cpu_usage,memory_usage,disk_usage,process_count
-# db:cpu_usage,memory_usage,disk_usage,process_count
+# 检查项分组配置文件
+# 格式：分组名:检查项1,检查项2,...
 
-# Web 服务器组
-web:cpu_usage,memory_usage,disk_usage,process_count,docker_containers,docker_status
+# 192.168.0.1 host1
+group_host1:system,kernel,uptime,nginx,mysql,redis
 
-# 数据库服务器组
-db:cpu_usage,memory_usage,disk_usage,process_count
+# 192.168.0.2 host2
+group_host2:system,kernel,uptime,kernel,appname1,appnam2
 
-# 所有服务器组
-all:cpu_usage,memory_usage,disk_usage,process_count,docker_containers,docker_status
+group_system:system,kernel,architecture,uptime
+group_resource:cpu,mem,disk,disk_root,disk_home
+group_apps:nginx,mysql,redis,memcached
+group_docker:oracle_19c,opengauss,cordys-crm
+group_all:system,kernel,architecture,uptime,cpu,mem,disk_boot,disk_root,disk_home,nginx,mysql,redis,kafka,logstash,zookeeper

@@ -1,721 +1,634 @@
 #!/bin/bash
 
-# 远程执行脚本 - Patrol 系统巡检工具 (新版本)
+# ============================================
+# 远程采集脚本
+# 读取 host_${HOST_IP}_patrol.conf 配置文件
+# 输出带状态信息的 JSON
+# ============================================
 
-# ========== 工具函数 ==========
+execshname=`basename $0`
+sh_name=`basename $0|cut -d . -f 1`
+PATROL_HOME=${HOME}/patrol
+logspath=${PATROL_HOME}/logs
+details_path=${PATROL_HOME}/data
 
-json_escape() {
-    local str="$1"
-    str="${str//\\/\\\\}"
-    str="${str//\"/\\\"}"
-    str="${str//$'\n'/\\n}"
-    str="${str//$'\r'/\\r}"
-    str="${str//$'\t'/\\t}"
-    echo -n "$str"
+if [ ! -d ${logspath} ]; then
+    mkdir -p ${logspath}
+fi
+
+if [ ! -d "${details_path}" ]; then
+    mkdir -p "${details_path}"
+fi
+
+CURRENT_DATE=$(date "+%Y%m%d")
+curDay=`date '+%Y-%m-%d'`
+actionlog=${logspath}/${sh_name}.${curDay}.log
+initdir=$PWD
+
+export TZ="Asia/Shanghai"
+
+HOST_IP=$(hostname -I | awk '{print $1}' | head -1)
+PATROL_CONFIG_FILE="host_${HOST_IP}_patrol.conf"
+
+# 全局变量
+declare -A DISK_THRESHOLDS
+APPS_LIST=""
+DOCKERS_LIST=""
+DISK_LIST=""
+cpu_warn=70
+cpu_serious=85
+mem_warn=70
+mem_serious=85
+
+# 使用文件来存储统计信息
+STATS_FILE="/tmp/system_patrol_stats.$$"
+DESCRIPTION_FILE="/tmp/system_patrol_desc.$$"
+
+init_stats() {
+    cat > "$STATS_FILE" << EOF
+all_count=0
+normal_count=0
+warn_count=0
+serious_count=0
+EOF
+    echo "" > "$DESCRIPTION_FILE"
 }
 
-read_thresholds() {
-    THRESHOLDS=()
-    local config_file="$1"
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^threshold: ]]; then
-            IFS=":" read -r type name rest <<< "$line"
-            IFS="," read -r warn crit <<< "$rest"
-            THRESHOLDS["$name"]="warn=$warn crit=$crit"
-        fi
-    done < "$config_file"
-}
-
-# 读取检查项配置
-read_checks() {
-    declare -A CHECKS
-    local config_file="$1"
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ ! "$line" =~ ^threshold: ]]; then
-            IFS=":" read -r name type command <<< "$line"
-            CHECKS["$name"]="type=$type command=$command"
-        fi
-    done < "$config_file"
-}
-
-check_alarm() {
-    local name="$1"
+update_stat() {
+    local key="$1"
     local value="$2"
-    local threshold="${THRESHOLDS[$name]}"
+    sed -i "s/^${key}=.*/${key}=${value}/" "$STATS_FILE"
+}
+
+get_stat() {
+    local key="$1"
+    grep "^${key}=" "$STATS_FILE" | cut -d= -f2
+}
+
+add_description() {
+    echo "$1" >> "$DESCRIPTION_FILE"
+}
+
+get_description() {
+    if [ ! -s "$DESCRIPTION_FILE" ] || [ -z "$(grep -v '^[[:space:]]*$' "$DESCRIPTION_FILE")" ]; then
+        echo "【正常】"
+    else
+        tr '\n' '|' < "$DESCRIPTION_FILE" | sed 's/|/<br\/>/g'
+    fi
+}
+
+cleanup() {
+    rm -f "$STATS_FILE" "$DESCRIPTION_FILE"
+}
+
+# ============ 获取状态等级 ============
+get_usage_state() {
+    local usage="$1"
+    local warn_threshold="$2"
+    local serious_threshold="$3"
+    local item_name="$4"
     
-    if [[ -z "$threshold" ]]; then
+    usage=$(echo "$usage" | sed 's/%//')
+    usage=${usage%.*}
+    
+    local all_count=$(get_stat "all_count")
+    update_stat "all_count" "$((all_count + 1))"
+    
+    if awk "BEGIN {exit !($usage >= $serious_threshold)}" 2>/dev/null; then
+        local serious_count=$(get_stat "serious_count")
+        update_stat "serious_count" "$((serious_count + 1))"
+        add_description "【严重】$item_name 使用率 ${usage}% ≥ ${serious_threshold}%"
+        echo "serious"
+    elif awk "BEGIN {exit !($usage >= $warn_threshold)}" 2>/dev/null; then
+        local warn_count=$(get_stat "warn_count")
+        update_stat "warn_count" "$((warn_count + 1))"
+        add_description "【警告】$item_name 使用率 ${usage}% ≥ ${warn_threshold}%"
+        echo "warn"
+    else
+        local normal_count=$(get_stat "normal_count")
+        update_stat "normal_count" "$((normal_count + 1))"
         echo "normal"
+    fi
+}
+
+# ============ 读取配置文件 ============
+read_patrol_config() {
+    local config_file="$1"
+    
+    if [ ! -f "$config_file" ]; then
+        echo "配置文件不存在: $config_file" >> ${actionlog}
+        return 1
+    fi
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(echo "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        
+        # 解析行：name:type:command
+        IFS=':' read -r name type command <<< "$line"
+        
+        case "$type" in
+            threshold)
+                # threshold:cpu:70,85 或 threshold:disk_root:80,90
+                local warn=$(echo "$command" | cut -d',' -f1)
+                local serious=$(echo "$command" | cut -d',' -f2)
+                if [[ "$name" == "cpu" ]]; then
+                    cpu_warn="$warn"
+                    cpu_serious="$serious"
+                elif [[ "$name" == "mem" ]]; then
+                    mem_warn="$warn"
+                    mem_serious="$serious"
+                else
+                    # 磁盘阈值
+                    DISK_THRESHOLDS["${name}_warn"]="$warn"
+                    DISK_THRESHOLDS["${name}_serious"]="$serious"
+                fi
+                ;;
+            disk)
+                # disk_root:disk:df -h /
+                DISK_LIST="${DISK_LIST}${name}:${command}"$'\n'
+                ;;
+            vhost)
+                # mysql:vhost:ps aux | grep mysql
+                APPS_LIST="${APPS_LIST}${name}:${type}:${command}"$'\n'
+                ;;
+            docker)
+                # opengauss:docker:docker ps --filter "name=opengauss"
+                DOCKERS_LIST="${DOCKERS_LIST}${name}:${type}:${command}"$'\n'
+                ;;
+        esac
+    done < "$config_file"
+    
+    export cpu_warn cpu_serious mem_warn mem_serious
+    export APPS_LIST DOCKERS_LIST DISK_LIST
+}
+
+# ============ 获取系统基本信息 ============
+get_basic_info() {
+    local time=$(date "+%Y-%m-%d %H:%M:%S")
+    local hostname=$(hostname)
+    local os=$(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"' 2>/dev/null || echo "Unknown")
+    
+    local uptime_seconds=$(awk '{print $1}' /proc/uptime | cut -d. -f1)
+    local uptimesince=$(date -d "@$(($(date +%s) - $uptime_seconds))" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
+    local uptimeduration=$(uptime | sed 's/.*up //; s/, *[0-9]* users.*//' | xargs echo "up" 2>/dev/null || echo "unknown")
+    
+    jq -n \
+        --arg time "$time" \
+        --arg hostip "$HOST_IP" \
+        --arg hostname "$hostname" \
+        --arg os "$os" \
+        --arg uptimesince "$uptimesince" \
+        --arg uptimeduration "$uptimeduration" \
+        '{
+            "time": $time,
+            "hostip": $hostip,
+            "hostname": $hostname,
+            "os": $os,
+            "uptimesince": $uptimesince,
+            "uptimeduration": $uptimeduration
+        }'
+}
+
+# ============ 获取CPU信息 ============
+get_cpu_info() {
+    local cpu_line=$(top -bn1 | grep "Cpu(s)" | head -1 2>/dev/null || echo "Cpu(s):  0.0 us,  0.0 sy,  0.0 ni, 100.0 id,  0.0 wa")
+    
+    local us=$(echo "$cpu_line" | sed -n 's/.* \([0-9.]*\) us.*/\1/p')
+    local sy=$(echo "$cpu_line" | sed -n 's/.* \([0-9.]*\) sy.*/\1/p')
+    local id=$(echo "$cpu_line" | sed -n 's/.* \([0-9.]*\) id.*/\1/p')
+    local wa=$(echo "$cpu_line" | sed -n 's/.* \([0-9.]*\) wa.*/\1/p')
+    
+    us=${us:-0}
+    sy=${sy:-0}
+    id=${id:-100}
+    wa=${wa:-0}
+    
+    local usage=$(awk "BEGIN {printf \"%.2f\", 100 - $id}" 2>/dev/null || echo "0")
+    local avgload=$(uptime | awk -F'load average:' '{print $2}' | sed 's/^ *//' 2>/dev/null || echo "0.00, 0.00, 0.00")
+    
+    local cpu_state=$(get_usage_state "$usage" "$cpu_warn" "$cpu_serious" "CPU")
+    
+    jq -n \
+        --arg usage "$usage" \
+        --arg sysusage "$sy" \
+        --arg idle "$id" \
+        --arg iowait "$wa" \
+        --arg avgload "$avgload" \
+        --arg usestate "$cpu_state" \
+        '{
+            "usage": $usage,
+            "sysusage": $sysusage,
+            "idle": $idle,
+            "iowait": $iowait,
+            "avgload": $avgload,
+            "usestate": $usestate
+        }'
+}
+
+# ============ 获取内存信息 ============
+get_memory_info() {
+    local mem_line=$(free -m 2>/dev/null | grep "^Mem:")
+    if [ -z "$mem_line" ]; then
+        mem_line=$(free -m 2>/dev/null | grep "Mem:")
+    fi
+    
+    if [ -z "$mem_line" ]; then
+        echo '{"total": "0", "used": "0", "free": "0", "available": "0", "usage": "0", "usestate": "serious", "swaptotal": "0", "swapused": "0", "swapfree": "0", "swapusage": "0"}'
         return
     fi
     
-    local warn=$(echo "$threshold" | awk '{print $1}' | cut -d'=' -f2)
-    local crit=$(echo "$threshold" | awk '{print $2}' | cut -d'=' -f2)
+    local total=$(echo "$mem_line" | awk '{print $2}')
+    local used=$(echo "$mem_line" | awk '{print $3}')
+    local free=$(echo "$mem_line" | awk '{print $4}')
+    local available=$(echo "$mem_line" | awk '{print $7}')
     
-    if awk "BEGIN {exit !($value >= $crit)}"; then
-        echo "serious"
-    elif awk "BEGIN {exit !($value >= $warn)}"; then
-        echo "alarm"
-    else
-        echo "normal"
+    if [ -z "$available" ]; then
+        available=$(echo "$mem_line" | awk '{print $6}')
     fi
+    
+    total=${total:-0}
+    used=${used:-0}
+    free=${free:-0}
+    available=${available:-0}
+    
+    local usage=$(awk "BEGIN {printf \"%.2f\", $used * 100 / $total}" 2>/dev/null || echo "0")
+    local mem_state=$(get_usage_state "$usage" "$mem_warn" "$mem_serious" "内存")
+    
+    local swap_line=$(free -m 2>/dev/null | grep "^Swap:")
+    if [ -z "$swap_line" ]; then
+        swap_line=$(free -m 2>/dev/null | grep "Swap:")
+    fi
+    
+    local swaptotal="0"
+    local swapused="0"
+    local swapfree="0"
+    local swapusage="0"
+    
+    if [ -n "$swap_line" ]; then
+        swaptotal=$(echo "$swap_line" | awk '{print $2}')
+        swapused=$(echo "$swap_line" | awk '{print $3}')
+        swapfree=$(echo "$swap_line" | awk '{print $4}')
+        swapusage=$(awk "BEGIN {printf \"%.2f\", $swapused * 100 / $swaptotal}" 2>/dev/null || echo "0")
+    fi
+    
+    # 生成使用率文本格式：使用率（使用量/总量）
+    local usage_text="${usage}% ($used MB/$total MB)"
+    local swapusage_text="${swapusage}% ($swapused MB/$swaptotal MB)"
+    
+    jq -n \
+        --arg total "$total" \
+        --arg used "$used" \
+        --arg free "$free" \
+        --arg available "$available" \
+        --arg usage "$usage" \
+        --arg usage_text "$usage_text" \
+        --arg usestate "$mem_state" \
+        --arg swaptotal "$swaptotal" \
+        --arg swapused "$swapused" \
+        --arg swapfree "$swapfree" \
+        --arg swapusage "$swapusage" \
+        --arg swapusage_text "$swapusage_text" \
+        '{
+            "total": $total,
+            "used": $used,
+            "free": $free,
+            "available": $available,
+            "usage": $usage,
+            "usage_text": $usage_text,
+            "usestate": $usestate,
+            "swaptotal": $swaptotal,
+            "swapused": $swapused,
+            "swapfree": $swapfree,
+            "swapusage": $swapusage,
+            "swapusage_text": $swapusage_text
+        }'
 }
 
-# ========== 系统信息采集 ==========
-
-collect_system_info() {
-    local system_output=""
-    local kernel_output=""
-    local uptime_output=""
-    local cpu_arch_output=""
-    
-    # 系统版本
-    if [[ -f /etc/os-release ]]; then
-        local pretty_name=$(cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '"')
-        system_output="$pretty_name"
-    else
-        system_output="unknown"
+# ============ 获取磁盘信息 ============
+get_disk_info() {
+    if [ -z "$DISK_LIST" ]; then
+        echo "[]"
+        return
     fi
     
-    # 内核版本
-    kernel_output=$(uname -r)
+    local disk_json=""
     
-    # 运行时长
-    uptime_output=$(uptime | awk -F'[ ,]+' '{print $3,$4}')
-    
-    # CPU架构
-    cpu_arch_output=$(uname -m)
-    if [[ "$cpu_arch_output" == "x86_64" || "$cpu_arch_output" == "aarch64" ]]; then
-        cpu_arch_output="64位"
-    else
-        cpu_arch_output="32位"
-    fi
-    
-    cat <<EOF
-  "system_info": {
-    "os_version": "$(json_escape "$system_output")",
-    "kernel_version": "$(json_escape "$kernel_output")",
-    "uptime": "$(json_escape "$uptime_output")",
-    "cpu_arch": "$(json_escape "$cpu_arch_output")"
-  }
-EOF
-}
-
-# ========== 资源信息采集 ==========
-
-collect_resource_info() {
-    # CPU 使用率
-    local cpu_usage=$(top -bn1 | grep 'Cpu(s)' | awk '{print 100 - $8}')
-    local cpu_alarm=$(check_alarm "system_cpu" "$cpu_usage")
-    
-    # 内存使用率
-    local mem_total=$(free -m | awk '/Mem:/ {print $2}')
-    local mem_used=$(free -m | awk '/Mem:/ {print $3}')
-    local mem_usage=$(awk "BEGIN {print ($mem_used/$mem_total)*100}")
-    local mem_alarm=$(check_alarm "system_mem" "$mem_usage")
-    
-    # 磁盘信息
-    local disk_array=()
-    while read -r line; do
-        [[ "$line" =~ ^Filesystem ]] && continue
-        local fs=$(echo "$line" | awk '{print $1}')
-        local size=$(echo "$line" | awk '{print $2}')
-        local used=$(echo "$line" | awk '{print $3}')
-        local avail=$(echo "$line" | awk '{print $4}')
-        local use_pct=$(echo "$line" | awk '{print $5}' | sed 's/%//')
-        local mount=$(echo "$line" | awk '{print $6}')
-        local disk_alarm=$(check_alarm "system_disk" "$use_pct")
+    while IFS=':' read -r name command; do
+        [ -z "$name" ] && continue
         
-        disk_array+=("{\"filesystem\":\"$(json_escape "$fs")\",\"size\":\"$(json_escape "$size")\",\"used\":\"$(json_escape "$used")\",\"available\":\"$(json_escape "$avail")\",\"use_percent\":$use_pct,\"mount_point\":\"$(json_escape "$mount")\",\"alarm_status\":\"$disk_alarm\"}")
-    done < <(df -h)
-    
-    local disks=$(IFS=, ; echo "${disk_array[*]}")
-    
-    cat <<EOF
-  "resource_info": {
-    "cpu": {
-      "usage": $cpu_usage,
-      "alarm_status": "$cpu_alarm"
-    },
-    "memory": {
-      "total_mb": $mem_total,
-      "used_mb": $mem_used,
-      "usage_percent": $mem_usage,
-      "alarm_status": "$mem_alarm"
-    },
-    "disks": [$disks]
-  }
-EOF
-}
-
-# ========== 网络信息采集 ==========
-
-collect_network_info() {
-    local interfaces=$(ip -json addr 2>/dev/null || echo "[]")
-    local routes=$(ip -json route 2>/dev/null || echo "[]")
-    local firewall_output=""
-    
-    if command -v iptables &> /dev/null; then
-        firewall_output=$(iptables -L -n -v 2>&1 | head -100)
-    else
-        firewall_output="iptables not available"
-    fi
-    
-    cat <<EOF
-  "network_info": {
-    "interfaces": "$(json_escape "$(ip addr 2>&1)")",
-    "routes": "$(json_escape "$(ip route 2>&1)")",
-    "firewall": "$(json_escape "$firewall_output")"
-  }
-EOF
-}
-
-# ========== 磁盘IO采集 ==========
-
-collect_disk_io() {
-    local vmstat_output=$(vmstat 1 3 2>&1)
-    local iostat_output=""
-    if command -v iostat &> /dev/null; then
-        iostat_output=$(iostat -x 1 2 2>&1)
-    else
-        iostat_output="iostat not available"
-    fi
-    
-    cat <<EOF
-  "disk_io": {
-    "vmstat": "$(json_escape "$vmstat_output")",
-    "iostat": "$(json_escape "$iostat_output")"
-  }
-EOF
-}
-
-# ========== 应用进程和容器采集 ==========
-
-collect_app_info() {
-    local checks_config="$1"
-    
-    local processes=$(collect_process_info "$checks_config")
-    local containers=$(collect_container_info "$checks_config")
-    
-    cat <<EOF
-  "app_info": {
-    "processes": [${processes:-}],
-    "docker_containers": [${containers:-}]
-  }
-EOF
-}
-
-# ========== 系统日志采集 ==========
-
-collect_log_info() {
-    local config_file="$1"
-    local log_array=()
-    
-    while IFS= read -r log_path; do
-        [[ -z "$log_path" || "$log_path" =~ ^# ]] && continue
+        local disk_line=$(eval "$command" 2>/dev/null | awk 'NR==2')
         
-        if [[ -f "$log_path" ]]; then
-            local log_size=$(du -m "$log_path" | awk '{print $1}')
-            local recent_logs=$(tail -10 "$log_path" 2>/dev/null || echo "Cannot read log file")
+        local item
+        if [ -z "$disk_line" ]; then
+            local all_count=$(get_stat "all_count")
+            update_stat "all_count" "$((all_count + 1))"
+            local serious_count=$(get_stat "serious_count")
+            update_stat "serious_count" "$((serious_count + 1))"
+            add_description "【严重】磁盘 $name 无法获取信息"
             
-            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"size_mb\":$log_size,\"recent_lines\":\"$(json_escape "$recent_logs")\"}")
+            item=$(jq -n \
+                --arg name "$name" \
+                --arg state "error" \
+                '{name: $name, state: $state}')
         else
-            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"file_not_found\":true}")
+            local filesystem=$(echo "$disk_line" | awk '{print $1}')
+            local total=$(echo "$disk_line" | awk '{print $2}')
+            local used=$(echo "$disk_line" | awk '{print $3}')
+            local available=$(echo "$disk_line" | awk '{print $4}')
+            local usage=$(echo "$disk_line" | awk '{print $5}' | sed 's/%//')
+            local mounted=$(echo "$disk_line" | awk '{print $6}')
+            
+            local warn="${DISK_THRESHOLDS[${name}_warn]:-78}"
+            local serious="${DISK_THRESHOLDS[${name}_serious]:-90}"
+            
+            local disk_state=$(get_usage_state "$usage" "$warn" "$serious" "磁盘 $mounted")
+            
+            item=$(jq -n \
+                --arg name "$name" \
+                --arg mounted "$mounted" \
+                --arg filesystem "$filesystem" \
+                --arg total "$total" \
+                --arg used "$used" \
+                --arg available "$available" \
+                --arg usage "$usage" \
+                --arg usestate "$disk_state" \
+                '{
+                    "name": $name,
+                    "mounted": $mounted,
+                    "filesystem": $filesystem,
+                    "total": $total,
+                    "used": $used,
+                    "available": $available,
+                    "usage": $usage,
+                    "usestate": $usestate
+                }')
         fi
-    done < "$config_file"
+        
+        if [ -n "$disk_json" ]; then
+            disk_json="$disk_json, $item"
+        else
+            disk_json="$item"
+        fi
+    done <<< "$(echo -e "$DISK_LIST")"
     
-    local logs=$(IFS=, ; echo "${log_array[*]}")
-    
-    cat <<EOF
-  "log_info": {
-    "log_files": [${logs:-}]
-  }
-EOF
+    echo "[$disk_json]"
 }
 
-# 收集服务器完整信息
-collect_server_info() {
-    local checks_config="$1"
-    
-    # 基本信息
-    local time=$(date '+%Y-%m-%d %H:%M:%S')
-    local hostip=$(hostname -I | awk '{print $1}')
-    local hostname=$(hostname)
-    local os=$(cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '"')
-    local uptimeduration=$(uptime)
-    
-    # 系统启动时间（近似值）
-    local uptimesince=$(date -d "$(uptime -s)" '+%Y-%m-%d %H:%M:%S')
-    
-    # CPU信息
-    local cpu_info=$(top -bn1 | grep 'Cpu(s)')
-    local cpu_usage=$(echo "$cpu_info" | awk '{print 100 - $8}')
-    local sysusage=$(echo "$cpu_info" | awk '{print $2}' | sed 's/%//')
-    local idle=$(echo "$cpu_info" | awk '{print $8}' | sed 's/%//')
-    local iowait=$(echo "$cpu_info" | awk '{print $10}' | sed 's/%//')
-    local avgload=$(uptime | awk -F'load average:' '{print $2}' | sed 's/^ //')
-    local cpu_usestate=$(check_alarm "system_cpu" "$cpu_usage")
-    
-    # 内存信息
-    local mem_total=$(free -m | awk '/Mem:/ {print $2}')
-    local mem_used=$(free -m | awk '/Mem:/ {print $3}')
-    local mem_free=$(free -m | awk '/Mem:/ {print $4}')
-    local mem_available=$(free -m | awk '/Mem:/ {print $7}')
-    local mem_usage=$(awk "BEGIN {print ($mem_used/$mem_total)*100}")
-    local mem_usestate=$(check_alarm "system_mem" "$mem_usage")
-    
-    # 交换空间信息
-    local swap_total=$(free -m | awk '/Swap:/ {print $2}')
-    local swap_used=$(free -m | awk '/Swap:/ {print $3}')
-    local swap_free=$(free -m | awk '/Swap:/ {print $4}')
-    local swap_usage=""
-    if [[ $swap_total -gt 0 ]]; then
-        swap_usage=$(awk "BEGIN {print ($swap_used/$swap_total)*100}")
+# ============ 获取应用信息 ============
+get_apps_info() {
+    if [ -z "$APPS_LIST" ]; then
+        echo "[]"
+        return
     fi
-    local swap_usestate="normal"
     
-    # 磁盘信息
-    local disk_array=()
-    while read -r line; do
-        [[ "$line" =~ ^Filesystem ]] && continue
-        local fs=$(echo "$line" | awk '{print $1}')
-        local size=$(echo "$line" | awk '{print $2}')
-        local used=$(echo "$line" | awk '{print $3}')
-        local avail=$(echo "$line" | awk '{print $4}')
-        local use_pct=$(echo "$line" | awk '{print $5}' | sed 's/%//')
-        local mount=$(echo "$line" | awk '{print $6}')
-        local disk_usestate=$(check_alarm "system_disk" "$use_pct")
+    local json_array=""
+    
+    while IFS=':' read -r app_name app_type app_cmd; do
+        [ -z "$app_name" ] && continue
         
-        disk_array+=(
-            "{
-                \"mounted\": \"$(json_escape "$mount")\",
-                \"filesystem\": \"$(json_escape "$fs")\",
-                \"total\": \"$(json_escape "$size")\",
-                \"used\": \"$(json_escape "$used")\",
-                \"available\": \"$(json_escape "$avail")\",
-                \"usage\": $use_pct,
-                \"usestate\": \"$disk_usestate\"}"
-        )
-    done < <(df -h)
-    
-    local disks=$(IFS=, ; echo "${disk_array[*]}")
-    
-    # 应用信息
-    local apps_array=()
-    local -A PROCESSES
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^process: ]]; then
-            IFS=":" read -r type proc_name service_name <<< "$line"
-            PROCESSES["$proc_name"]="$service_name"
-        fi
-    done < "$checks_config"
-    
-    for proc_name in "${!PROCESSES[@]}"; do
-        local service_name="${PROCESSES[$proc_name]}"
-        local ps_line=$(ps aux | grep -v grep | grep "$proc_name" | head -1)
+        local process_info=$(eval "$app_cmd" 2>/dev/null | head -1)
         
-        if [[ -n "$ps_line" ]]; then
-                local user=$(echo "$ps_line" | awk '{print $1}')
-                local pid=$(echo "$ps_line" | awk '{print $2}')
-                local cpu_pct=$(echo "$ps_line" | awk '{print $3}')
-                local mem_pct=$(echo "$ps_line" | awk '{print $4}')
-                local etime=$(ps -p $pid -o etime= 2>/dev/null || echo "unknown")
+        local item
+        if [ -z "$process_info" ]; then
+            local all_count=$(get_stat "all_count")
+            update_stat "all_count" "$((all_count + 1))"
+            local serious_count=$(get_stat "serious_count")
+            update_stat "serious_count" "$((serious_count + 1))"
+            add_description "【严重】应用 $app_name 未运行"
+            
+            item=$(jq -n \
+                --arg name "$app_name" \
+                --arg type "$app_type" \
+                '{
+                    "name": $name,
+                    "type": $type,
+                    "state": "stopped"
+                }')
+        else
+            local normal_count=$(get_stat "normal_count")
+            update_stat "normal_count" "$((normal_count + 1))"
+            
+            local user=$(echo "$process_info" | awk '{print $1}')
+            local pid=$(echo "$process_info" | awk '{print $2}')
+            local cpu_usage=$(echo "$process_info" | awk '{print $3}' | sed 's/%//')
+            local mem_usage=$(echo "$process_info" | awk '{print $4}' | sed 's/%//')
+            
+            local runtime_sec=$(ps -o etimes= -p "$pid" 2>/dev/null | xargs)
+            if [ -z "$runtime_sec" ]; then
+                runtime_sec="0"
+            fi
+            
+            local runtime_formatted=""
+            if [ "$runtime_sec" -gt 0 ]; then
+                local days=$((runtime_sec / 86400))
+                local hours=$(((runtime_sec % 86400) / 3600))
+                local mins=$(((runtime_sec % 3600) / 60))
                 
-                # 计算运行时间（秒）
-                local runtime_sec=0
-                if [[ "$etime" != "unknown" ]]; then
-                    runtime_sec=$(ps -p $pid -o etimes= 2>/dev/null || echo 0)
+                if [ $days -gt 0 ]; then
+                    runtime_formatted="${days}天${hours}小时"
+                elif [ $hours -gt 0 ]; then
+                    runtime_formatted="${hours}小时${mins}分"
+                elif [ $mins -gt 0 ]; then
+                    runtime_formatted="${mins}分"
+                else
+                    runtime_formatted="刚刚"
                 fi
-                
-                apps_array+=("{
-                    \"name\": \"$(json_escape "$proc_name")\",
-                    \"type\": \"vhost\",
-                    \"user\": \"$(json_escape "$user")\",
-                    \"pid\": \"$pid\",
-                    \"cpuusage\": $cpu_pct,
-                    \"memusage\": $mem_pct,
-                    \"runtime\": \"$(json_escape "$etime")\",
-                    \"runtime_sec\": $runtime_sec,
-                    \"state\": \"running\"}")
             else
-                apps_array+=("{
-                    \"name\": \"$(json_escape "$proc_name")\",
-                    \"type\": \"vhost\",
-                    \"user\": \"\",
-                    \"pid\": \"\",
-                    \"cpuusage\": \"\",
-                    \"memusage\": \"\",
-                    \"runtime\": \"\",
-                    \"runtime_sec\": \"\",
-                    \"state\": \"stopped\"}")
+                runtime_formatted="0秒"
             fi
-    done
-    
-    local apps=$(IFS=, ; echo "${apps_array[*]}")
-    
-    # 容器信息
-    local dockers_array=()
-    local -A CONTAINERS
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^docker: ]]; then
-            IFS=":" read -r type container_name service_name <<< "$line"
-            CONTAINERS["$container_name"]="$service_name"
-        fi
-    done < "$checks_config"
-    
-    if command -v docker &> /dev/null; then
-        for container_name in "${!CONTAINERS[@]}"; do
-            local service_name="${CONTAINERS[$container_name]}"
-            local container_id=$(docker ps -a --filter "name=$container_name" --format "{{.ID}}" 2>/dev/null | head -1)
             
-            if [[ -n "$container_id" ]]; then
-                local state=$(docker inspect "$container_id" --format "{{.State.Status}}" 2>/dev/null)
-                local status=$(docker ps -a --filter "name=$container_name" 2>/dev/null | head -1)
-                
-                dockers_array+=("{
-                    \"name\": \"$(json_escape "$container_name")\",
-                    \"id\": \"CONTAINER\",
-                    \"state\": \"$(json_escape "$state")\",
-                    \"status\": \"$(json_escape "$status")\"}")
-            else
-                dockers_array+=("{
-                    \"name\": \"$(json_escape "$container_name")\",
-                    \"id\": \"\",
-                    \"state\": \"not_found\",
-                    \"status\": \"\"}")
-            fi
-        done
-    else
-        # Docker不可用
-        for container_name in "${!CONTAINERS[@]}"; do
-            dockers_array+=(
-                "{
-                    \"name\": \"$(json_escape "$container_name")\",
-                    \"id\": \"\",
-                    \"state\": \"not_found\",
-                    \"status\": \"\"}"
-            )
-        done
-    fi
-    
-    local dockers=$(IFS=, ; echo "${dockers_array[*]}")
-    
-    # 结果汇总
-    local all_count=$((1 + 1 + ${#disk_array[@]} + ${#apps_array[@]} + ${#dockers_array[@]}))
-    local normal_count=0
-    local warn_count=0
-    local serious_count=0
-    local description=""
-    
-    # 检查CPU状态
-    if [[ "$cpu_usestate" == "normal" ]]; then
-        normal_count=$((normal_count + 1))
-    elif [[ "$cpu_usestate" == "alarm" ]]; then
-        warn_count=$((warn_count + 1))
-        description+="<br/>【警告】CPU 使用率 ${cpu_usage}% ≥ 70%<br/>"
-    else
-        serious_count=$((serious_count + 1))
-        description+="<br/>【严重】CPU 使用率 ${cpu_usage}% ≥ 85%<br/>"
-    fi
-    
-    # 检查内存状态
-    if [[ "$mem_usestate" == "normal" ]]; then
-        normal_count=$((normal_count + 1))
-    elif [[ "$mem_usestate" == "alarm" ]]; then
-        warn_count=$((warn_count + 1))
-        description+="<br/>【警告】内存使用率 ${mem_usage}% ≥ 70%<br/>"
-    else
-        serious_count=$((serious_count + 1))
-        description+="<br/>【严重】内存使用率 ${mem_usage}% ≥ 85%<br/>"
-    fi
-    
-    # 检查磁盘状态
-    for ((i=0; i<${#disk_array[@]}; i++)); do
-        normal_count=$((normal_count + 1))
-    done
-    
-    # 检查应用状态
-    for ((i=0; i<${#apps_array[@]}; i++)); do
-        if [[ "${apps_array[$i]}" =~ "\"state\": \"running\"" ]]; then
-            normal_count=$((normal_count + 1))
-        else
-            serious_count=$((serious_count + 1))
-            local app_name=$(echo "${apps_array[$i]}" | grep -o '"name": "[^"]*"' | cut -d'"' -f4)
-            description+="<br/>【严重】应用 $app_name 未运行<br/>"
+            item=$(jq -n \
+                --arg name "$app_name" \
+                --arg type "$app_type" \
+                --arg user "$user" \
+                --arg pid "$pid" \
+                --arg cpuusage "$cpu_usage" \
+                --arg memusage "$mem_usage" \
+                --arg runtime "$runtime_formatted" \
+                --arg runtime_sec "$runtime_sec" \
+                '{
+                    "name": $name,
+                    "type": $type,
+                    "user": $user,
+                    "pid": $pid,
+                    "cpuusage": $cpuusage,
+                    "memusage": $memusage,
+                    "runtime": $runtime,
+                    "runtime_sec": $runtime_sec,
+                    "state": "running"
+                }')
         fi
-    done
+        
+        if [ -n "$json_array" ]; then
+            json_array="$json_array, $item"
+        else
+            json_array="$item"
+        fi
+    done <<< "$(echo -e "$APPS_LIST")"
     
-    # 检查容器状态
+    echo "[$json_array]"
+}
+
+# ============ 获取Docker容器信息 ============
+get_dockers_info() {
     if ! command -v docker &> /dev/null; then
-        serious_count=$((serious_count + 1))
-        description+="<br/>【严重】Docker 不可用<br/>"
-    else
-        for ((i=0; i<${#dockers_array[@]}; i++)); do
-            if [[ "${dockers_array[$i]}" =~ "\"state\": \"running\"" ]]; then
-                normal_count=$((normal_count + 1))
+        echo "[]"
+        return
+    fi
+    
+    if [ -z "$DOCKERS_LIST" ]; then
+        echo "[]"
+        return
+    fi
+    
+    local json_array=""
+    
+    while IFS=':' read -r container_name container_type container_cmd; do
+        [ -z "$container_name" ] && continue
+        
+        if [[ "$container_cmd" != *"--format"* ]]; then
+            container_cmd="$container_cmd --format \"{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}\""
+        fi
+        
+        local container_info=$(eval "$container_cmd" 2>/dev/null | head -1)
+        
+        local item
+        if [ -z "$container_info" ]; then
+            local all_count=$(get_stat "all_count")
+            update_stat "all_count" "$((all_count + 1))"
+            local serious_count=$(get_stat "serious_count")
+            update_stat "serious_count" "$((serious_count + 1))"
+            add_description "【严重】Docker容器 $container_name 未找到"
+            
+            item=$(jq -n \
+                --arg name "$container_name" \
+                '{
+                    "name": $name,
+                    "state": "not_found"
+                }')
+        else
+            local normal_count=$(get_stat "normal_count")
+            update_stat "normal_count" "$((normal_count + 1))"
+            
+            local id=$(echo "$container_info" | cut -d'|' -f1)
+            local name=$(echo "$container_info" | cut -d'|' -f2)
+            local status=$(echo "$container_info" | cut -d'|' -f3)
+            local image=$(echo "$container_info" | cut -d'|' -f4)
+            
+            if [[ "$status" == *"Up"* ]]; then
+                state="running"
             else
-                serious_count=$((serious_count + 1))
-                local container_name=$(echo "${dockers_array[$i]}" | grep -o '"name": "[^"]*"' | cut -d'"' -f4)
-                description+="<br/>【严重】Docker容器 $container_name 未找到<br/>"
+                state="exited"
             fi
-        done
-    fi
+            
+            item=$(jq -n \
+                --arg name "$container_name" \
+                --arg id "$id" \
+                --arg state "$state" \
+                --arg status "$status" \
+                --arg image "$image" \
+                '{
+                    "name": $name,
+                    "id": $id,
+                    "state": $state,
+                    "status": $status,
+                    "image": $image
+                }')
+        fi
+        
+        if [ -n "$json_array" ]; then
+            json_array="$json_array, $item"
+        else
+            json_array="$item"
+        fi
+    done <<< "$(echo -e "$DOCKERS_LIST")"
     
-    if [[ $serious_count -eq 0 && $warn_count -eq 0 ]]; then
-        description="【正常】"
-    fi
-    
-    # 输出完整结构
-    cat <<EOF
-  {
-    "time": "$time",
-    "hostip": "$hostip",
-    "hostname": "$hostname",
-    "os": "$os",
-    "uptimesince": "$uptimesince",
-    "uptimeduration": "$uptimeduration",
-    "cpu": {
-      "usage": "$cpu_usage",
-      "sysusage": "$sysusage",
-      "idle": "$idle",
-      "iowait": "$iowait",
-      "avgload": "$avgload",
-      "usestate": "$cpu_usestate"
-    },
-    "memory": {
-      "total": "$mem_total",
-      "used": "$mem_used",
-      "free": "$mem_free",
-      "available": "$mem_available",
-      "usage": "$mem_usage",
-      "usestate": "$mem_usestate",
-      "swaptotal": "$swap_total",
-      "swapused": "$swap_used",
-      "swapfree": "$swap_free",
-      "swapusage": "$swap_usage",
-      "swapusestate": "$swap_usestate"
-    },
-    "disk": [$disks],
-    "apps": [$apps],
-    "dockers": [$dockers],
-    "result": {
-      "all_count": $all_count,
-      "normal_count": $normal_count,
-      "warn_count": $warn_count,
-      "serious_count": $serious_count,
-      "description": "$description"
-    }
-  }
-EOF
+    echo "[$json_array]"
 }
 
-# ========== 主函数 ==========
+# ============ 获取巡检结果统计 ============
+get_patrol_result() {
+    local all_count=$(get_stat "all_count")
+    local normal_count=$(get_stat "normal_count")
+    local warn_count=$(get_stat "warn_count")
+    local serious_count=$(get_stat "serious_count")
+    local description=$(get_description)
+    
+    jq -n \
+        --argjson all_count "$all_count" \
+        --argjson normal_count "$normal_count" \
+        --argjson warn_count "$warn_count" \
+        --argjson serious_count "$serious_count" \
+        --arg description "$description" \
+        '{
+            "all_count": $all_count,
+            "normal_count": $normal_count,
+            "warn_count": $warn_count,
+            "serious_count": $serious_count,
+            "description": $description
+        }'
+}
 
+# ============ 主函数 ============
 main() {
-    local checks_config="$1"
+    init_stats
     
-    # 读取阈值配置
-    read_thresholds "$checks_config"
+    echo "读取配置文件: $PATROL_CONFIG_FILE" >> ${actionlog}
+    read_patrol_config "$PATROL_CONFIG_FILE"
     
-    # 开始输出JSON
-    echo "["
+    echo "获取系统基本信息..."
+    local basic_info=$(get_basic_info)
+    echo "获取CPU信息..."
+    local cpu_info=$(get_cpu_info)
+    echo "获取内存信息..."
+    local memory_info=$(get_memory_info)
+    echo "获取磁盘信息..."
+    local disk_info=$(get_disk_info)
+    echo "获取应用信息..."
+    local apps_info=$(get_apps_info)
+    echo "获取Docker信息..."
+    local dockers_info=$(get_dockers_info)
     
-    # 服务器信息
-    collect_server_info "$checks_config"
+    echo "生成巡检结果..."
+    local result_info=$(get_patrol_result)
     
-    echo "]"
+    jq -n \
+        --argjson basic "$basic_info" \
+        --argjson cpu "$cpu_info" \
+        --argjson memory "$memory_info" \
+        --argjson disk "$disk_info" \
+        --argjson apps "$apps_info" \
+        --argjson dockers "$dockers_info" \
+        --argjson result "$result_info" \
+        '$basic + {
+            "cpu": $cpu,
+            "memory": $memory,
+            "disk": $disk,
+            "apps": $apps,
+            "dockers": $dockers,
+            "result": $result
+        }' > "${details_path}/data_${HOST_IP}_${CURRENT_DATE}.json"
+
+    cleanup
+    
+    echo "巡检数据已保存到: ${details_path}/data_${HOST_IP}_${CURRENT_DATE}.json"
+    cat "${details_path}/data_${HOST_IP}_${CURRENT_DATE}.json"
 }
 
-# 收集检查项结果
-collect_checks() {
-    local config_file="$1"
-    local -A CHECKS
-    local -A PROCESSES
-    local -A CONTAINERS
-    local -A LOGS
-    
-    # 读取检查项配置
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ ! "$line" =~ ^threshold: ]]; then
-            IFS=":" read -r type name rest <<< "$line"
-            if [[ "$type" == "process" || "$type" == "docker" || "$type" == "log" ]]; then
-                # 特殊类型处理
-                if [[ "$type" == "process" ]]; then
-                    PROCESSES["$name"]="$rest"
-                elif [[ "$type" == "docker" ]]; then
-                    CONTAINERS["$name"]="$rest"
-                elif [[ "$type" == "log" ]]; then
-                    LOGS["$name"]="$rest"
-                fi
-            else
-                # 普通检查项
-                CHECKS["$type"]="name=$name command=$rest"
-            fi
-        fi
-    done < "$config_file"
-    
-    local check_array=()
-    
-    # 处理普通检查项
-    for check_type in "${!CHECKS[@]}"; do
-        local check_info="${CHECKS[$check_type]}"
-        local check_name=$(echo "$check_info" | awk '{print $1}' | cut -d'=' -f2)
-        local check_command=$(echo "$check_info" | awk '{$1=""; print substr($0,2)}' | cut -d'=' -f2-)
-        
-        local check_value=$(eval "$check_command" 2>/dev/null || echo "N/A")
-        local check_status="normal"
-        
-        # 检查是否有阈值配置
-        if [[ -n "${THRESHOLDS[$check_name]}" ]]; then
-            # 提取数值进行阈值检查
-            local numeric_value=$(echo "$check_value" | grep -E "[0-9]+(\.[0-9]+)?" | head -1 | sed 's/[^0-9.]//g')
-            if [[ -n "$numeric_value" ]]; then
-                check_status=$(check_alarm "$check_name" "$numeric_value")
-            fi
-        fi
-        
-        check_array+=("{\"name\":\"$(json_escape "$check_name")\",\"type\":\"$(json_escape "$check_type")\",\"value\":\"$(json_escape "$check_value")\",\"status\":\"$check_status\"}")
-    done
-    
-    local checks=$(IFS=, ; echo "${check_array[*]}")
-    
-    cat <<EOF
-  "checks": [${checks:-}]
-EOF
-}
+trap cleanup EXIT
 
-# 收集进程信息
-collect_process_info() {
-    local config_file="$1"
-    local -A PROCESSES
-    
-    # 从 checks.conf 中读取进程配置
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^process: ]]; then
-            IFS=":" read -r type proc_name service_name <<< "$line"
-            PROCESSES["$proc_name"]="$service_name"
-        fi
-    done < "$config_file"
-    
-    local process_array=()
-    
-    for proc_name in "${!PROCESSES[@]}"; do
-        local service_name="${PROCESSES[$proc_name]}"
-        local ps_line=$(ps aux | grep -v grep | grep "$proc_name" | head -1)
-        
-        if [[ -n "$ps_line" ]]; then
-            local pid=$(echo "$ps_line" | awk '{print $2}')
-            local cpu_pct=$(echo "$ps_line" | awk '{print $3}')
-            local mem_pct=$(echo "$ps_line" | awk '{print $4}')
-            local state=$(ps -p $pid -o state= 2>/dev/null || echo "unknown")
-            local etime=$(ps -p $pid -o etime= 2>/dev/null || echo "unknown")
-            local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
-            local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
-            
-            process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"pid\":$pid,\"state\":\"$(json_escape "$state")\",\"running_time\":\"$(json_escape "$etime")\",\"cpu_usage\":$cpu_pct,\"memory_usage\":$mem_pct,\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\",\"running\":true}")
-        else
-            process_array+=("{\"process_name\":\"$(json_escape "$proc_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
-        fi
-    done
-    
-    local processes=$(IFS=, ; echo "${process_array[*]}")
-    echo "$processes"
-}
+curTime=`date '+%Y-%m-%d %T'`
+echo "======start run: ${curTime}..." >> ${actionlog}
+cd ${PATROL_HOME}
 
-# 收集容器信息
-collect_container_info() {
-    local config_file="$1"
-    local -A CONTAINERS
-    
-    # 从 checks.conf 中读取容器配置
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^docker: ]]; then
-            IFS=":" read -r type container_name service_name <<< "$line"
-            CONTAINERS["$container_name"]="$service_name"
-        fi
-    done < "$config_file"
-    
-    local docker_array=()
-    
-    if command -v docker &> /dev/null; then
-        for container_name in "${!CONTAINERS[@]}"; do
-            local service_name="${CONTAINERS[$container_name]}"
-            local container_id=$(docker ps -a --filter "name=$container_name" --format "{{.ID}}" 2>/dev/null | head -1)
-            
-            if [[ -n "$container_id" ]]; then
-                local state=$(docker inspect "$container_id" --format "{{.State.Status}}" 2>/dev/null)
-                local docker_stats=$(docker stats --no-stream "$container_id" --format "{{.CPUPerc}},{{.MemPerc}},{{.MemUsage}}" 2>/dev/null)
-                local cpu_pct=$(echo "$docker_stats" | cut -d',' -f1 | sed 's/%//')
-                local mem_pct=$(echo "$docker_stats" | cut -d',' -f2 | sed 's/%//')
-                local mem_usage=$(echo "$docker_stats" | cut -d',' -f3)
-                local size=$(docker inspect "$container_id" --format "{{.SizeRw}}" 2>/dev/null | numfmt --to=iec --suffix=B 2>/dev/null || echo "unknown")
-                local cpu_alarm=$(check_alarm "process_cpu" "$cpu_pct")
-                local mem_alarm=$(check_alarm "process_mem" "$mem_pct")
-                
-                docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"container_id\":\"$(json_escape "$container_id")\",\"state\":\"$(json_escape "$state")\",\"cpu_usage\":${cpu_pct:-0},\"memory_usage\":${mem_pct:-0},\"memory_used\":\"$(json_escape "$mem_usage")\",\"disk_used\":\"$(json_escape "$size")\",\"cpu_alarm_status\":\"$cpu_alarm\",\"memory_alarm_status\":\"$mem_alarm\"}")
-            else
-                docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"running\":false}")
-            fi
-        done
-    else
-        for container_name in "${!CONTAINERS[@]}"; do
-            local service_name="${CONTAINERS[$container_name]}"
-            docker_array+=("{\"container_name\":\"$(json_escape "$container_name")\",\"service_name\":\"$(json_escape "$service_name")\",\"docker_unavailable\":true}")
-        done
-    fi
-    
-    local containers=$(IFS=, ; echo "${docker_array[*]}")
-    echo "$containers"
-}
+main
 
-# 收集日志信息
-collect_log_info() {
-    local config_file="$1"
-    local -A LOGS
-    
-    # 从 checks.conf 中读取日志配置
-    while IFS= read -r line; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        if [[ "$line" =~ ^log: ]]; then
-            IFS=":" read -r type log_path log_name <<< "$line"
-            LOGS["$log_path"]="$log_name"
-        fi
-    done < "$config_file"
-    
-    local log_array=()
-    
-    for log_path in "${!LOGS[@]}"; do
-        local log_name="${LOGS[$log_path]}"
-        if [[ -f "$log_path" ]]; then
-            local log_size=$(du -m "$log_path" 2>/dev/null | awk '{print $1}' || echo "N/A")
-            local recent_logs=$(tail -10 "$log_path" 2>/dev/null || echo "Cannot read log file")
-            
-            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"log_name\":\"$(json_escape "$log_name")\",\"size_mb\":${log_size:-0},\"recent_lines\":\"$(json_escape "$recent_logs")\"}")
-        else
-            log_array+=("{\"log_path\":\"$(json_escape "$log_path")\",\"log_name\":\"$(json_escape "$log_name")\",\"file_not_found\":true}")
-        fi
-    done
-    
-    local logs=$(IFS=, ; echo "${log_array[*]}")
-    
-    cat <<EOF
-  "log_info": {
-    "log_files": [${logs:-}]
-  }
-EOF
-}
+curTime=`date '+%Y-%m-%d %T'`
+echo "finish get remote datas." >> ${actionlog}
+echo "#####end run at: ${curTime}." >> ${actionlog}
+echo "" >> ${actionlog}
+cd $initdir
+echo "[end] finish run."
 
-# 执行主函数
-if [[ $# -eq 1 ]]; then
-    main "$1"
-else
-    # 默认配置文件名
-    SCRIPT_DIR="$(dirname "$0")"
-    main "$SCRIPT_DIR/conf/checks.conf"
-fi
+find ${logspath} -type f -ctime +180 -name "*.log" 2>/dev/null | xargs rm -f 2>/dev/null

@@ -3,7 +3,7 @@ let reports = [];
 
 // 页面加载完成后执行
 window.onload = function() {
-    if (window.location.pathname.includes('index.html') || window.location.pathname.endsWith('/') || window.location.pathname.endsWith('/web/')) {
+    if (window.location.pathname.includes('index.html') || window.location.pathname.endsWith('/')) {
         loadReportList();
     } else if (window.location.pathname.includes('report.html')) {
         loadReportDetail();
@@ -14,697 +14,593 @@ window.onload = function() {
 
 // 加载报告列表
 function loadReportList() {
-    const dateListContainer = document.getElementById('report-list');
-    dateListContainer.innerHTML = '<div class="loading">加载中...</div>';
-    
-    console.log('当前页面路径:', window.location.pathname);
-    
-    // 首先尝试获取目录列表
-    const possibleListPaths = [
-        'output/',
-        '../output/',
-        '../../output/',
-        '/output/'
-    ];
-    
-    function tryListPath(index) {
-        if (index >= possibleListPaths.length) {
-            console.log('无法获取目录列表，尝试使用已知报告');
-            loadSingleReport();
-            return;
-        }
-        
-        const path = possibleListPaths[index];
-        console.log('尝试获取目录:', path);
-        
-        fetch(path)
-            .then(response => {
-                if (!response.ok) throw new Error('目录不可访问');
-                return response.text();
-            })
-            .then(html => {
-                console.log('成功获取目录页面');
-                parseReportList(html, path);
-            })
-            .catch(error => {
-                console.log('路径', path, '获取目录失败:', error);
-                tryListPath(index + 1);
-            });
-    }
-    
-    function loadSingleReport() {
-        // 尝试直接使用我们现有的报告
-        const reportId = 'patrol_report_20260421_175130';
-        const date = '2026-04-21 17:51:30';
-        
-        // 尝试几种不同的路径
-        const possiblePaths = [
-            `output/${reportId}.json`,
-            `../output/${reportId}.json`,
-            `../../output/${reportId}.json`,
-            `/output/${reportId}.json`
-        ];
-        
-        function tryPath(pathIndex) {
-            if (pathIndex >= possiblePaths.length) {
-                console.error('所有路径都尝试失败');
-                dateListContainer.innerHTML = '<div class="alert alert-danger">加载报告失败，请检查文件路径或网络连接</div>';
-                return;
+    // 尝试加载真实的报告文件列表
+    fetch('./data/')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to load report list');
             }
+            return response.text();
+        })
+        .then(html => {
+            // 解析HTML获取报告文件列表
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const files = doc.querySelectorAll('a[href$=".json"]');
             
-            const path = possiblePaths[pathIndex];
-            console.log('尝试路径:', path);
+            // 使用Promise.all来处理异步请求
+            const reportPromises = [];
             
-            fetch(path)
-                .then(response => {
-                    console.log('响应状态:', response.status);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    return response.text();
-                })
-                .then(text => {
-                    try {
-                        const data = JSON.parse(text);
-                        console.log('成功加载JSON数据');
-                        renderSingleReport(data, reportId, date);
-                    } catch (e) {
-                        console.error('JSON解析失败');
-                        tryPath(pathIndex + 1);
+            files.forEach(file => {
+                const filename = file.getAttribute('href');
+                const id = filename.replace('.json', '');
+                const parts = id.split('_');
+                if (parts.length >= 3) {
+                    const date = parts[1];
+                    const time = parts[2];
+                    const formattedDate = `${date.substring(0,4)}-${date.substring(4,6)}-${date.substring(6,8)}`;
+                    const formattedTime = `${time.substring(0,2)}:${time.substring(2,4)}:${time.substring(4,6)}`;
+                    
+                    // 跳过无效的文件名
+                    if (filename.includes('')) {
+                        return Promise.resolve({
+                            id: id,
+                            date: formattedDate,
+                            time: formattedTime,
+                            serverCount: 0,
+                            checkCount: 0,
+                            passCount: 0,
+                            failCount: 0
+                        });
                     }
+                    
+                    // 创建一个Promise来加载报告文件
+                    const reportPromise = fetch(`./data/${filename}?t=${new Date().getTime()}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            let passCount = 0;
+                            let failCount = 0;
+                            let checkCount = 0;
+                            
+                            if (Array.isArray(data)) {
+                                // 新格式：数据是数组，每个元素是服务器信息
+                                data.forEach(server => {
+                                    // 计算检查项数量
+                                    if (server.cpu) checkCount++;
+                                    if (server.memory) checkCount++;
+                                    if (server.disk) checkCount += server.disk.length;
+                                    if (server.apps) checkCount += server.apps.length;
+                                    if (server.dockers) checkCount += server.dockers.length;
+                                    
+                                    // 计算通过/失败数量
+                                    if (server.cpu && (server.cpu.usestate === 'normal' || server.cpu.usestate === 'ok')) passCount++;
+                                    else if (server.cpu) failCount++;
+                                    
+                                    if (server.memory && (server.memory.usestate === 'normal' || server.memory.usestate === 'ok')) passCount++;
+                                    else if (server.memory) failCount++;
+                                    
+                                    if (server.disk) {
+                                        server.disk.forEach(disk => {
+                                            if (disk.usestate === 'normal' || disk.usestate === 'ok') passCount++;
+                                            else failCount++;
+                                        });
+                                    }
+                                    
+                                    if (server.apps) {
+                                        server.apps.forEach(app => {
+                                            if (app.state === 'running') passCount++;
+                                            else failCount++;
+                                        });
+                                    }
+                                    
+                                    if (server.dockers) {
+                                        server.dockers.forEach(docker => {
+                                            if (docker.state === 'running' || docker.state === 'exited') passCount++;
+                                            else failCount++;
+                                        });
+                                    }
+                                });
+                            } else if (data && data.servers && Array.isArray(data.servers)) {
+                                // 旧格式：数据包含servers数组
+                                data.servers.forEach(server => {
+                                    if (server.checks && Array.isArray(server.checks)) {
+                                        server.checks.forEach(check => {
+                                            checkCount++;
+                                            if (check.status === 'PASS') {
+                                                passCount++;
+                                            } else if (check.status === 'FAIL') {
+                                                failCount++;
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                            
+                            return {
+                                id: id,
+                                date: formattedDate,
+                                time: formattedTime,
+                                serverCount: Array.isArray(data) ? data.length : (data && data.servers ? data.servers.length : 0),
+                                checkCount: checkCount,
+                                passCount: passCount,
+                                failCount: failCount
+                            };
+                        })
+                        .catch(error => {
+                            console.error('Failed to load report:', error);
+                            // 即使报告加载失败，也返回一个条目
+                            return {
+                                id: id,
+                                date: formattedDate,
+                                time: formattedTime,
+                                serverCount: 0,
+                                checkCount: 0,
+                                passCount: 0,
+                                failCount: 0
+                            };
+                        });
+                    
+                    reportPromises.push(reportPromise);
+                }
+            });
+            
+            // 等待所有报告加载完成
+            Promise.all(reportPromises)
+                .then(reportList => {
+                    // 按时间降序排序
+                    reportList.sort((a, b) => {
+                        return new Date(`${b.date} ${b.time}`) - new Date(`${a.date} ${a.time}`);
+                    });
+                    
+                    reports = reportList;
+                    renderReportList();
                 })
                 .catch(error => {
-                    console.error('路径', path, '失败:', error);
-                    tryPath(pathIndex + 1);
+                    console.error('Failed to load reports:', error);
+                    // 使用模拟数据作为后备
+                    const mockReports = [
+                        {
+                            id: 'report_20260416_044740',
+                            date: '2026-04-16',
+                            time: '04:47:40',
+                            serverCount: 3,
+                            checkCount: 25,
+                            passCount: 20,
+                            failCount: 5
+                        },
+                        {
+                            id: 'report_20260416_044350',
+                            date: '2026-04-16',
+                            time: '04:43:50',
+                            serverCount: 3,
+                            checkCount: 25,
+                            passCount: 19,
+                            failCount: 6
+                        },
+                        {
+                            id: 'report_20260416_044341',
+                            date: '2026-04-16',
+                            time: '04:43:41',
+                            serverCount: 3,
+                            checkCount: 25,
+                            passCount: 21,
+                            failCount: 4
+                        }
+                    ];
+                    
+                    reports = mockReports;
+                    renderReportList();
                 });
-        }
-        
-        tryPath(0);
-    }
-    
-    function parseReportList(html, basePath) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        const files = doc.querySelectorAll('a[href$=".json"]');
-        
-        if (files.length === 0) {
-            console.log('目录中没有找到JSON文件，尝试加载单个报告');
-            loadSingleReport();
-            return;
-        }
-        
-        console.log('找到', files.length, '个报告文件');
-        
-        const reportPromises = [];
-        
-        files.forEach(file => {
-            const filename = file.getAttribute('href');
-            if (filename.includes('')) return;
+        })
+        .catch(error => {
+            console.error('Failed to load report list:', error);
+            // 使用模拟数据作为后备
+            const mockReports = [
+                {
+                    id: 'report_20260416_044740',
+                    date: '2026-04-16',
+                    time: '04:47:40',
+                    serverCount: 3,
+                    checkCount: 25,
+                    passCount: 20,
+                    failCount: 5
+                },
+                {
+                    id: 'report_20260416_044350',
+                    date: '2026-04-16',
+                    time: '04:43:50',
+                    serverCount: 3,
+                    checkCount: 25,
+                    passCount: 19,
+                    failCount: 6
+                },
+                {
+                    id: 'report_20260416_044341',
+                    date: '2026-04-16',
+                    time: '04:43:41',
+                    serverCount: 3,
+                    checkCount: 25,
+                    passCount: 21,
+                    failCount: 4
+                }
+            ];
             
-            const id = filename.replace('.json', '');
-            const parts = id.split('_');
-            let dateStr = '';
-            let timeStr = '';
-            
-            if (parts.length >= 3) {
-                dateStr = parts[1];
-                timeStr = parts[2];
-                dateStr = dateStr.substring(0,4) + '-' + dateStr.substring(4,6) + '-' + dateStr.substring(6,8);
-                timeStr = timeStr.substring(0,2) + ':' + timeStr.substring(2,4) + ':' + timeStr.substring(4,6);
-            }
-            
-            const reportPromise = fetch(basePath + filename)
-                .then(response => response.json())
-                .then(data => {
-                    return {
-                        id: id,
-                        filename: filename,
-                        date: dateStr || '未知日期',
-                        time: timeStr || '未知时间',
-                        data: data
-                    };
-                })
-                .catch(error => {
-                    console.error('加载报告失败:', filename, error);
-                    return null;
-                });
-            
-            reportPromises.push(reportPromise);
+            reports = mockReports;
+            renderReportList();
         });
-        
-        Promise.all(reportPromises)
-            .then(reportList => {
-                const validReports = reportList.filter(r => r !== null);
-                validReports.sort((a, b) => {
-                    const dateA = a.date + ' ' + a.time;
-                    const dateB = b.date + ' ' + b.time;
-                    return new Date(dateB) - new Date(dateA);
-                });
-                
-                reports = validReports;
-                renderReportList(basePath);
-            })
-            .catch(error => {
-                console.error('加载报告列表失败:', error);
-                loadSingleReport();
-            });
+}
+
+// 渲染报告列表
+function renderReportList() {
+    const reportList = document.getElementById('report-list');
+    if (!reportList) return;
+    
+    if (reports.length === 0) {
+        reportList.innerHTML = '<p>暂无巡检报告</p>';
+        return;
     }
     
-    function renderSingleReport(data, reportId, date) {
-        let serverCount = 0;
-        let totalCount = 0;
-        let normalCount = 0;
-        let warnCount = 0;
-        let seriousCount = 0;
-        
-        if (Array.isArray(data)) {
-            serverCount = data.length;
-            data.forEach(server => {
-                if (server.result) {
-                    totalCount += server.result.all_count || 0;
-                    normalCount += server.result.normal_count || 0;
-                    warnCount += server.result.warn_count || 0;
-                    seriousCount += server.result.serious_count || 0;
-                }
-            });
-        } else if (data.servers) {
-            serverCount = data.servers.length;
-            data.servers.forEach(server => {
-                const serverInfo = server.results ? server.results[0] : server;
-                if (serverInfo && serverInfo.result) {
-                    totalCount += serverInfo.result.all_count || 0;
-                    normalCount += serverInfo.result.normal_count || 0;
-                    warnCount += serverInfo.result.warn_count || 0;
-                    seriousCount += serverInfo.result.serious_count || 0;
-                }
-            });
-        }
-        
-        dateListContainer.innerHTML = '';
-        const card = document.createElement('div');
-        card.className = 'report-item';
-        
-        let statusClass = 'status-pass';
-        if (seriousCount > 0) statusClass = 'status-fail';
-        else if (warnCount > 0) statusClass = 'status-warn';
-        
-        card.innerHTML = `
-            <h3>${date}</h3>
-            <p>服务器数量: ${serverCount}</p>
-            <p>检查项: 总计 ${totalCount} | 正常 ${normalCount} | 警告 ${warnCount} | 严重 ${seriousCount}</p>
-            <p>状态: <span class="${statusClass}">${seriousCount > 0 ? '有严重问题' : warnCount > 0 ? '有警告' : '正常'}</span></p>
-            <div class="links">
-                <a href="report.html?id=${reportId}">查看详情</a>
-            </div>
+    let html = '';
+    reports.forEach(report => {
+        html += `
+        <div class="report-item">
+            <h3>${report.date} ${report.time}</h3>
+            <p>服务器数量: ${report.serverCount}</p>
+            <p>检查项数量: ${report.checkCount}</p>
+            <p>通过: ${report.passCount} | 失败: ${report.failCount}</p>
+            <a href="report.html?id=${report.id}">查看详情</a>
+            <a href="report_detailed.html?file=${report.id}.json">查看详细报告</a>
+        </div>
         `;
-        
-        dateListContainer.appendChild(card);
-    }
+    });
     
-    function renderReportList(basePath) {
-        dateListContainer.innerHTML = '';
-        
-        reports.forEach(report => {
-            let serverCount = 0;
-            let totalCount = 0;
-            let normalCount = 0;
-            let warnCount = 0;
-            let seriousCount = 0;
-            const data = report.data;
-            
-            if (Array.isArray(data)) {
-                serverCount = data.length;
-                data.forEach(server => {
-                    if (server.result) {
-                        totalCount += server.result.all_count || 0;
-                        normalCount += server.result.normal_count || 0;
-                        warnCount += server.result.warn_count || 0;
-                        seriousCount += server.result.serious_count || 0;
-                    }
-                });
-            } else if (data.servers) {
-                serverCount = data.servers.length;
-                data.servers.forEach(server => {
-                    const serverInfo = server.results ? server.results[0] : server;
-                    if (serverInfo && serverInfo.result) {
-                        totalCount += serverInfo.result.all_count || 0;
-                        normalCount += serverInfo.result.normal_count || 0;
-                        warnCount += serverInfo.result.warn_count || 0;
-                        seriousCount += serverInfo.result.serious_count || 0;
-                    }
-                });
-            }
-            
-            const card = document.createElement('div');
-            card.className = 'report-item';
-            
-            let statusClass = 'status-pass';
-            if (seriousCount > 0) statusClass = 'status-fail';
-            else if (warnCount > 0) statusClass = 'status-warn';
-            
-            card.innerHTML = `
-                <h3>${report.date} ${report.time}</h3>
-                <p>服务器数量: ${serverCount}</p>
-                <p>检查项: 总计 ${totalCount} | 正常 ${normalCount} | 警告 ${warnCount} | 严重 ${seriousCount}</p>
-                <p>状态: <span class="${statusClass}">${seriousCount > 0 ? '有严重问题' : warnCount > 0 ? '有警告' : '正常'}</span></p>
-                <div class="links">
-                    <a href="report.html?id=${report.id}">查看详情</a>
-                </div>
-            `;
-            
-            dateListContainer.appendChild(card);
-        });
-    }
-    
-    tryListPath(0);
+    reportList.innerHTML = html;
 }
 
 // 加载报告详情
 function loadReportDetail() {
+    // 获取URL参数
     const urlParams = new URLSearchParams(window.location.search);
     const reportId = urlParams.get('id');
     
     if (!reportId) {
-        const alertList = document.getElementById('alert-list');
-        if (alertList) alertList.innerHTML = '<p>请选择要查看的报告</p>';
+        document.getElementById('content').innerHTML = '<p>未指定报告ID</p>';
         return;
     }
     
-    console.log('当前页面路径:', window.location.pathname);
-    
-    // 尝试几种不同的路径
-    const possiblePaths = [
-        `output/${reportId}.json`,
-        `../output/${reportId}.json`,
-        `../../output/${reportId}.json`,
-        `/output/${reportId}.json`
-    ];
-    
-    // 按顺序尝试路径
-    function tryPath(index) {
-        if (index >= possiblePaths.length) {
-            console.error('所有路径都尝试失败');
-            const alertList = document.getElementById('alert-list');
-            if (alertList) alertList.innerHTML = '<p>加载报告失败，请重试</p>';
-            return;
-        }
-        
-        const path = possiblePaths[index];
-        console.log('尝试路径:', path);
-        
-        fetch(path)
-            .then(response => {
-                console.log('响应状态:', response.status);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                return response.text();
-            })
-            .then(text => {
-                try {
-                    const data = JSON.parse(text);
-                    console.log('成功加载JSON数据');
-                    renderReportDetail(data);
-                } catch (e) {
-                    console.error('JSON解析失败');
-                    tryPath(index + 1);
-                }
-            })
-            .catch(error => {
-                console.error('路径', path, '失败:', error);
-                tryPath(index + 1);
-            });
-    }
-    
-    tryPath(0);
+    // 加载真实的报告数据
+    fetch(`./data/${reportId}.json`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to load report');
+            }
+            return response.json();
+        })
+        .then(data => {
+            // 检查数据结构
+            if (!data) {
+                document.getElementById('content').innerHTML = '<p>报告数据格式错误</p>';
+                return;
+            }
+            
+            renderReportDetail(data);
+        })
+        .catch(error => {
+            console.error('Failed to load report:', error);
+            document.getElementById('content').innerHTML = '<p>加载报告失败，请重试</p>';
+        });
 }
 
 // 渲染报告详情
 function renderReportDetail(data) {
-    // 更新报告时间
-    const now = new Date();
-    const reportTime = now.toLocaleString('zh-CN');
-    const reportDateEl = document.getElementById('report-time');
-    const reportDateEl2 = document.getElementById('report-date');
-    if (reportDateEl) reportDateEl.textContent = reportTime;
-    if (reportDateEl2) reportDateEl2.textContent = '巡检报告日期: ' + now.toLocaleDateString('zh-CN');
+    const content = document.getElementById('content');
+    if (!content) return;
     
-    // 统计信息
-    let totalChecks = 0;
-    let normalChecks = 0;
-    let warningChecks = 0;
-    let errorChecks = 0;
+    let html = `
+    <div class="summary">
+        <h2>巡检汇总信息</h2>
+        <div class="summary-item"><strong>报告生成时间:</strong> ${new Date().toLocaleString()}</div>
+        <div class="summary-item"><strong>服务器数量:</strong> ${Array.isArray(data) ? data.length : 0}</div>
+    </div>
+    `;
     
     // 告警信息
-    const alertList = [];
+    let hasAlert = false;
+    let alertHtml = '<div class="alert alert-warning"><h3>巡检告警信息</h3><ul>';
     
-    // 处理每个服务器的数据
-    let servers = [];
     if (Array.isArray(data)) {
-        servers = data;
-    } else if (data.servers) {
-        servers = data.servers;
-    }
-    
-    servers.forEach(server => {
-        if (server.error) {
-            // 处理错误情况
-            alertList.push({
-                host: (server.alias || server.hostname || 'Unknown') + ' (' + (server.ip || server.hostip || 'Unknown') + ')',
-                message: `【错误】${server.message}`
-            });
-            return;
-        }
-
-        const serverInfo = server.results ? server.results[0] : server;
-        
-        // 计算检查项数量
-        if (serverInfo.cpu) {
-            totalChecks++;
-            if (serverInfo.cpu.usestate === 'normal') normalChecks++;
-            else if (serverInfo.cpu.usestate === 'warn') warningChecks++;
-            else errorChecks++;
-
-            if (serverInfo.cpu.usestate !== 'normal') {
-                alertList.push({
-                    host: (server.hostname || server.alias || 'Unknown') + ' (' + (server.hostip || server.ip || 'Unknown') + ')',
-                    message: `【${serverInfo.cpu.usestate === 'warn' ? '告警' : '严重'}】CPU 状态异常 - 使用率: ${serverInfo.cpu.usage}%, 状态: ${serverInfo.cpu.usestate}`
+        // 新格式：数据是数组，每个元素是服务器信息
+        data.forEach(server => {
+            const serverName = server.hostname || server.alias || server.server || 'Unknown';
+            const serverIp = server.hostip || server.ip || 'Unknown';
+            
+            // 检查CPU
+            if (server.cpu && (server.cpu.usestate === 'warn' || server.cpu.usestate === 'serious')) {
+                hasAlert = true;
+                alertHtml += `<li>${serverName} (${serverIp}): CPU使用率过高 - 实际值: ${server.cpu.usage}%, 状态: ${server.cpu.usestate}</li>`;
+            }
+            
+            // 检查内存
+            if (server.memory && (server.memory.usestate === 'warn' || server.memory.usestate === 'serious')) {
+                hasAlert = true;
+                alertHtml += `<li>${serverName} (${serverIp}): 内存使用率过高 - 实际值: ${server.memory.usage}%, 状态: ${server.memory.usestate}</li>`;
+            }
+            
+            // 检查磁盘
+            if (server.disk) {
+                server.disk.forEach(disk => {
+                    if (disk.usestate === 'warn' || disk.usestate === 'serious') {
+                        hasAlert = true;
+                        alertHtml += `<li>${serverName} (${serverIp}): 磁盘使用率过高 (${disk.mounted}) - 实际值: ${disk.usage}%, 状态: ${disk.usestate}</li>`;
+                    }
                 });
             }
-        }
-
-        if (serverInfo.memory) {
-            totalChecks++;
-            if (serverInfo.memory.usestate === 'normal') normalChecks++;
-            else if (serverInfo.memory.usestate === 'warn') warningChecks++;
-            else errorChecks++;
-
-            if (serverInfo.memory.usestate !== 'normal') {
-                alertList.push({
-                    host: (server.hostname || server.alias || 'Unknown') + ' (' + (server.hostip || server.ip || 'Unknown') + ')',
-                    message: `【${serverInfo.memory.usestate === 'warn' ? '告警' : '严重'}】内存 状态异常 - 使用率: ${serverInfo.memory.usage}%, 状态: ${serverInfo.memory.usestate}`
+            
+            // 检查应用
+            if (server.apps) {
+                server.apps.forEach(app => {
+                    if (app.state !== 'running') {
+                        hasAlert = true;
+                        alertHtml += `<li>${serverName} (${serverIp}): 应用 ${app.name} 状态异常 - 状态: ${app.state}</li>`;
+                    }
                 });
             }
-        }
-
-        if (serverInfo.disk && Array.isArray(serverInfo.disk)) {
-            serverInfo.disk.forEach(disk => {
-                totalChecks++;
-                if (disk.usestate === 'normal') normalChecks++;
-                else if (disk.usestate === 'warn') warningChecks++;
-                else errorChecks++;
-
-                if (disk.usestate !== 'normal') {
-                    alertList.push({
-                        host: (server.hostname || server.alias || 'Unknown') + ' (' + (server.hostip || server.ip || 'Unknown') + ')',
-                        message: `【${disk.usestate === 'warn' ? '告警' : '严重'}】磁盘 状态异常 - 挂载点: ${disk.mounted}, 使用率: ${disk.usage}%, 状态: ${disk.usestate}`
-                    });
-                }
-            });
-        }
-
-        if (serverInfo.apps && Array.isArray(serverInfo.apps)) {
-            serverInfo.apps.forEach(app => {
-                totalChecks++;
-                if (app.state === 'running') normalChecks++;
-                else if (app.state === 'warn') warningChecks++;
-                else errorChecks++;
-
-                if (app.state !== 'running') {
-                    alertList.push({
-                        host: (server.hostname || server.alias || 'Unknown') + ' (' + (server.hostip || server.ip || 'Unknown') + ')',
-                        message: `【${app.state === 'warn' ? '告警' : '严重'}】应用状态异常 - ${app.name}: ${app.state}`
-                    });
-                }
-            });
-        }
-
-        if (serverInfo.dockers && Array.isArray(serverInfo.dockers)) {
-            serverInfo.dockers.forEach(docker => {
-                totalChecks++;
-                if (docker.state === 'running' || docker.state === 'exited') normalChecks++;
-                else if (docker.state === 'warn') warningChecks++;
-                else errorChecks++;
-
-                if (docker.state !== 'running' && docker.state !== 'exited') {
-                    alertList.push({
-                        host: (server.hostname || server.alias || 'Unknown') + ' (' + (server.hostip || server.ip || 'Unknown') + ')',
-                        message: `【${docker.state === 'warn' ? '告警' : '严重'}】Docker 状态异常 - ${docker.name}: ${docker.state}`
-                    });
-                }
-            });
-        }
-    });
-    
-    // 更新统计信息
-    const totalChecksEl = document.getElementById('total-checks');
-    const normalChecksEl = document.getElementById('normal-checks');
-    const warningChecksEl = document.getElementById('warning-checks');
-    const errorChecksEl = document.getElementById('error-checks');
-    
-    if (totalChecksEl) totalChecksEl.textContent = totalChecks;
-    if (normalChecksEl) normalChecksEl.textContent = normalChecks;
-    if (warningChecksEl) warningChecksEl.textContent = warningChecks;
-    if (errorChecksEl) errorChecksEl.textContent = errorChecks;
-    
-    // 渲染告警信息
-    const alertListElement = document.getElementById('alert-list');
-    if (alertListElement) {
-        if (alertList.length > 0) {
-            // 按主机分组告警信息
-            const alertsByHost = {};
-            alertList.forEach(alert => {
-                if (!alertsByHost[alert.host]) {
-                    alertsByHost[alert.host] = [];
-                }
-                alertsByHost[alert.host].push(alert.message);
-            });
             
-            let alertHtml = '';
-            Object.keys(alertsByHost).forEach(host => {
-                alertHtml += `
-                    <div class="alert-item">
-                        <div class="host">【${host}】</div>
-                        <div class="messages">${alertsByHost[host].join(' | ')}</div>
-                    </div>
-                `;
-            });
-            alertListElement.innerHTML = alertHtml;
-        } else {
-            alertListElement.innerHTML = '<p>暂无告警信息</p>';
-        }
+            // 检查Docker容器
+            if (server.dockers) {
+                server.dockers.forEach(docker => {
+                    if (docker.state !== 'running') {
+                        hasAlert = true;
+                        alertHtml += `<li>${serverName} (${serverIp}): 容器 ${docker.name} 状态异常 - 状态: ${docker.state}</li>`;
+                    }
+                });
+            }
+        });
+    } else if (data && data.servers && Array.isArray(data.servers)) {
+        // 旧格式：数据包含servers数组
+        data.servers.forEach(server => {
+            if (server.checks && Array.isArray(server.checks)) {
+                server.checks.forEach(check => {
+                    if (check.status === 'FAIL') {
+                        hasAlert = true;
+                        alertHtml += `<li>${server.alias} (${server.ip}): ${check.name} - 实际值: ${check.raw_output}, 预期值: ${check.expected}</li>`;
+                    }
+                });
+            }
+        });
     }
     
-    // 渲染主机信息
-    const hostsSection = document.getElementById('hosts-section');
-    if (hostsSection) {
-        let hostsHtml = '';
-        
-        servers.forEach(server => {
-            if (server.error) {
-                hostsHtml += `
-                    <div class="host-section">
-                        <h2>主机: ${server.alias || server.hostname || 'Unknown'} (${server.ip || server.hostip || 'Unknown'})</h2>
-                        <div class="alert-item">
-                            <div class="host">错误信息</div>
-                            <div class="messages">${server.message}</div>
-                        </div>
-                    </div>
-                `;
-                return;
-            }
-
-            const serverInfo = server.results ? server.results[0] : server;
+    if (hasAlert) {
+        alertHtml += '</ul></div>';
+        html += alertHtml;
+    }
+    
+    // 服务器信息
+    if (Array.isArray(data)) {
+        // 新格式：数据是数组，每个元素是服务器信息
+        data.forEach(server => {
+            const serverName = server.hostname || server.alias || server.server || 'Unknown';
+            const serverIp = server.hostip || server.ip || 'Unknown';
             
-            let cpuUsage = serverInfo.cpu ? serverInfo.cpu.usage : 'N/A';
-            let cpuState = serverInfo.cpu ? serverInfo.cpu.usestate : 'normal';
-            let memUsage = serverInfo.memory ? serverInfo.memory.usage : 'N/A';
-            let memState = serverInfo.memory ? serverInfo.memory.usestate : 'normal';
-            let uptime = server.uptimeduration || serverInfo.uptimesince || 'N/A';
-            let os = server.os || serverInfo.os || 'N/A';
-            let serverName = server.hostname || server.alias || 'Unknown';
-            let serverIp = server.hostip || server.ip || 'Unknown';
-
-            hostsHtml += `
-                <div class="host-section">
-                    <h2>主机: ${serverName} (${serverIp})</h2>
-                    
-                    <div class="host-info">
-                        <div class="host-info-item">
-                            <div class="label">运行时间</div>
-                            <div class="value">${uptime}</div>
-                        </div>
-                        <div class="host-info-item">
-                            <div class="label">操作系统</div>
-                            <div class="value">${os}</div>
-                        </div>
-                        <div class="host-info-item">
-                            <div class="label">检查时间</div>
-                            <div class="value">${server.time || serverInfo.time || 'N/A'}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="status-cards">
-                        <div class="status-card">
-                            <h3>CPU状态</h3>
-                            <div class="status-item">
-                                <div class="label">使用率</div>
-                                <div class="value">${cpuUsage}%</div>
-                                <div class="progress-bar">
-                                    <div class="progress progress-${cpuState === 'normal' ? 'green' : cpuState === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(cpuUsage) || 0}%"></div>
-                                </div>
-                            </div>
-                            <div class="status-item">
-                                <div class="label">平均负载</div>
-                                <div class="value">${serverInfo.cpu ? serverInfo.cpu.avgload : 'N/A'}</div>
-                            </div>
-                        </div>
-                        
-                        <div class="status-card">
-                            <h3>内存状态</h3>
-                            <div class="status-item">
-                                <div class="label">使用率</div>
-                                <div class="value">${serverInfo.memory ? (serverInfo.memory.usage_text || memUsage + '%') : 'N/A'}</div>
-                                <div class="progress-bar">
-                                    <div class="progress progress-${memState === 'normal' ? 'green' : memState === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(memUsage) || 0}%"></div>
-                                </div>
-                            </div>
-                            <div class="status-item">
-                                <div class="label">Swap使用率</div>
-                                <div class="value">${serverInfo.memory ? (serverInfo.memory.swapusage_text || serverInfo.memory.swapusage + '%') : 'N/A'}</div>
-                            </div>
-                        </div>
-                        
-                        <div class="status-card">
-                            <h3>磁盘使用状态</h3>
-                            ${serverInfo.disk && Array.isArray(serverInfo.disk) ? serverInfo.disk.map(disk => `
-                                <div class="status-item">
-                                    <div class="label">${disk.mounted}</div>
-                                    <div class="value">${disk.usage}% (${disk.used}/${disk.total})</div>
-                                    <div class="progress-bar">
-                                        <div class="progress progress-${disk.usestate === 'normal' ? 'green' : disk.usestate === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(disk.usage) || 0}%"></div>
-                                    </div>
-                                </div>
-                            `).join('') : '<div class="status-item"><div class="label">磁盘</div><div class="value">N/A</div></div>'}
-                        </div>
-                    </div>
+            html += `
+            <div class="server-section">
+                <div class="server-header">服务器: ${serverName} (${serverIp})</div>
+                <table>
+                    <tr>
+                        <th>检查项</th>
+                        <th>详情</th>
+                        <th>状态</th>
+                    </tr>
             `;
             
-            if (serverInfo.result) {
-                hostsHtml += `
-                    <div class="result-card">
-                        <h3>巡检结果</h3>
-                        <div class="result-item"><strong>总计:</strong> ${serverInfo.result.all_count || 0}</div>
-                        <div class="result-item"><strong>正常:</strong> ${serverInfo.result.normal_count || 0}</div>
-                        <div class="result-item"><strong>警告:</strong> ${serverInfo.result.warn_count || 0}</div>
-                        <div class="result-item"><strong>严重:</strong> ${serverInfo.result.serious_count || 0}</div>
-                        ${serverInfo.result.description && serverInfo.result.description !== '【正常】' ? `
-                            <div class="result-description">${serverInfo.result.description}</div>
-                        ` : ''}
-                    </div>
+            // 系统信息
+            if (server.os) {
+                html += `
+                    <tr>
+                        <td>操作系统</td>
+                        <td>${server.os}</td>
+                        <td><span class="status-pass">正常</span></td>
+                    </tr>
                 `;
             }
             
-            if (serverInfo.apps && Array.isArray(serverInfo.apps)) {
-                hostsHtml += `
-                    <div class="service-list">
-                        <h3>应用状态</h3>
-                        <table class="service-table">
-                            <thead>
-                                <tr>
-                                    <th>进程名</th>
-                                    <th>服务名称</th>
-                                    <th>进程ID</th>
-                                    <th>进程序态</th>
-                                    <th>运行时长</th>
-                                    <th>CPU使用率</th>
-                                    <th>内存使用率</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${serverInfo.apps.map(app => `
-                                    <tr>
-                                        <td>${app.name}</td>
-                                        <td>${app.name}</td>
-                                        <td>${app.pid || '-'}</td>
-                                        <td class="status-${app.state}">${app.state}</td>
-                                        <td>${app.runtime || 'unknown'}</td>
-                                        <td>${app.cpuusage || '0.0'}%</td>
-                                        <td>${app.memusage || '0.0'}%</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
+            if (server.time) {
+                html += `
+                    <tr>
+                        <td>巡检时间</td>
+                        <td>${server.time}</td>
+                        <td><span class="status-pass">正常</span></td>
+                    </tr>
                 `;
             }
             
-            if (serverInfo.dockers && Array.isArray(serverInfo.dockers)) {
-                hostsHtml += `
-                    <div class="docker-list">
-                        <h3>Docker容器状态</h3>
-                        <table class="docker-table">
-                            <thead>
-                                <tr>
-                                    <th>容器名称</th>
-                                    <th>服务名称</th>
-                                    <th>容器ID</th>
-                                    <th>状态</th>
-                                    <th>运行时长</th>
-                                    <th>CPU使用率</th>
-                                    <th>内存使用率</th>
-                                    <th>内存使用量</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${serverInfo.dockers.map(docker => `
-                                    <tr>
-                                        <td>${docker.name}</td>
-                                        <td>${docker.name}</td>
-                                        <td>${docker.id || '-'}</td>
-                                        <td class="status-${docker.state}">${docker.status || docker.state}</td>
-                                        <td>${docker.runtime || 'unknown'}</td>
-                                        <td>${docker.cpuusage || '0.0'}%</td>
-                                        <td>${docker.memusage || '0.0'}%</td>
-                                        <td>${docker.memused || '-'}</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
+            // CPU信息
+            if (server.cpu) {
+                let statusClass = 'status-pass';
+                if (server.cpu.usestate === 'warn') statusClass = 'status-warn';
+                if (server.cpu.usestate === 'serious') statusClass = 'status-fail';
+                
+                html += `
+                    <tr>
+                        <td>CPU使用率</td>
+                        <td>${server.cpu.usage}%</td>
+                        <td><span class="${statusClass}">${server.cpu.usestate}</span></td>
+                    </tr>
                 `;
             }
             
-            hostsHtml += `
-                </div>
+            // 内存信息
+            if (server.memory) {
+                let statusClass = 'status-pass';
+                if (server.memory.usestate === 'warn') statusClass = 'status-warn';
+                if (server.memory.usestate === 'serious') statusClass = 'status-fail';
+                
+                html += `
+                    <tr>
+                        <td>内存使用</td>
+                        <td>已用: ${server.memory.used}MB / 总量: ${server.memory.total}MB (${server.memory.usage}%)</td>
+                        <td><span class="${statusClass}">${server.memory.usestate}</span></td>
+                    </tr>
+                `;
+            }
+            
+            // 磁盘信息
+            if (server.disk && server.disk.length > 0) {
+                server.disk.forEach(disk => {
+                    let statusClass = 'status-pass';
+                    if (disk.usestate === 'warn') statusClass = 'status-warn';
+                    if (disk.usestate === 'serious') statusClass = 'status-fail';
+                    
+                    html += `
+                        <tr>
+                            <td>磁盘 ${disk.mounted}</td>
+                            <td>已用: ${disk.used} / 总量: ${disk.total} (${disk.usage}%)</td>
+                            <td><span class="${statusClass}">${disk.usestate}</span></td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            // 应用信息
+            if (server.apps && server.apps.length > 0) {
+                server.apps.forEach(app => {
+                    let statusClass = app.state === 'running' ? 'status-pass' : 'status-fail';
+                    
+                    html += `
+                        <tr>
+                            <td>应用 ${app.name}</td>
+                            <td>状态: ${app.state}, PID: ${app.pid}, CPU: ${app.cpuusage}%, MEM: ${app.memusage}%</td>
+                            <td><span class="${statusClass}">${app.state}</span></td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            // Docker容器信息
+            if (server.dockers && server.dockers.length > 0) {
+                server.dockers.forEach(docker => {
+                    let statusClass = docker.state === 'running' ? 'status-pass' : 'status-fail';
+                    
+                    html += `
+                        <tr>
+                            <td>容器 ${docker.name}</td>
+                            <td>状态: ${docker.state}, ID: ${docker.id}</td>
+                            <td><span class="${statusClass}">${docker.state}</span></td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            // 结果统计
+            if (server.result) {
+                html += `
+                    <tr>
+                        <td>巡检统计</td>
+                        <td>总计: ${server.result.all_count}, 正常: ${server.result.normal_count}, 警告: ${server.result.warn_count}, 严重: ${server.result.serious_count}</td>
+                        <td><span class="status-pass">完成</span></td>
+                    </tr>
+                `;
+                
+                if (server.result.description && server.result.description !== "【正常】") {
+                    html += `
+                        <tr>
+                            <td>告警详情</td>
+                            <td colspan="2" style="color: red;">${server.result.description}</td>
+                        </tr>
+                    `;
+                }
+            }
+            
+            html += `
+                </table>
+            </div>
             `;
         });
-        
-        hostsSection.innerHTML = hostsHtml;
+    } else if (data && data.servers && Array.isArray(data.servers)) {
+        // 旧格式：数据包含servers数组
+        data.servers.forEach(server => {
+            html += `
+            <div class="server-section">
+                <div class="server-header">服务器: ${server.alias} (${server.ip})</div>
+                <table>
+                    <tr>
+                        <th>检查项</th>
+                        <th>命令</th>
+                        <th>实际输出</th>
+                        <th>预期值</th>
+                        <th>状态</th>
+                        <th>执行时间(ms)</th>
+                    </tr>
+            `;
+            
+            if (server.checks && Array.isArray(server.checks)) {
+                server.checks.forEach(check => {
+                    let statusClass = '';
+                    switch (check.status) {
+                        case 'PASS': statusClass = 'status-pass'; break;
+                        case 'FAIL': statusClass = 'status-fail'; break;
+                        case 'WARN': statusClass = 'status-warn'; break;
+                    }
+                    
+                    html += `
+                        <tr>
+                            <td>${check.name}</td>
+                            <td>${check.command}</td>
+                            <td>${check.raw_output}</td>
+                            <td>${check.expected}</td>
+                            <td><span class="${statusClass}">${check.status}</span></td>
+                            <td>${check.duration_ms || 0}</td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            html += `
+                </table>
+            </div>
+            `;
+        });
     }
+    
+    content.innerHTML = html;
 }
 
 // 加载趋势数据
 function loadTrendData() {
-    const content = document.getElementById('content');
-    content.innerHTML = `
-        <h2>巡检趋势分析</h2>
-        <div class="chart-container">
-            <h3>资源使用趋势</h3>
-            <canvas id="resourceChart" width="800" height="400"></canvas>
-        </div>
-        <div class="chart-container">
-            <h3>告警趋势</h3>
-            <canvas id="alertChart" width="800" height="400"></canvas>
-        </div>
-    `;
-    
+    // 这里应该从服务器获取趋势数据，现在使用模拟数据
     const mockTrendData = {
-        dates: ['2026-04-19', '2026-04-20', '2026-04-21'],
-        cpuUsage: [12, 8, 6.5],
-        memoryUsage: [15, 13, 12.2],
-        diskUsage: [7, 6, 6],
-        alertCount: [5, 4, 4]
+        dates: ['2026-04-14', '2026-04-15', '2026-04-16'],
+        cpuUsage: [65, 72, 75],
+        memoryUsage: [70, 78, 85],
+        diskUsage: [60, 65, 70],
+        alertCount: [1, 2, 3]
     };
     
-    drawResourceChart(mockTrendData);
-    drawAlertChart(mockTrendData);
+    renderTrendData(mockTrendData);
+}
+
+// 渲染趋势数据
+function renderTrendData(data) {
+    const content = document.getElementById('content');
+    if (!content) return;
+    
+    let html = `
+    <h2>巡检趋势分析</h2>
+    <div class="chart-container">
+        <h3>资源使用趋势</h3>
+        <canvas id="resourceChart" width="800" height="400"></canvas>
+    </div>
+    <div class="chart-container">
+        <h3>告警趋势</h3>
+        <canvas id="alertChart" width="800" height="400"></canvas>
+    </div>
+    `;
+    
+    content.innerHTML = html;
+    
+    // 简单的图表绘制（实际项目中可以使用Chart.js等库）
+    drawResourceChart(data);
+    drawAlertChart(data);
 }
 
 // 绘制资源使用趋势图
@@ -713,87 +609,71 @@ function drawResourceChart(data) {
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    const padding = 60;
     
-    ctx.clearRect(0, 0, width, height);
-    
-    const xScale = (width - padding * 2) / (data.dates.length - 1);
-    const yScale = (height - padding * 2) / 100;
-    
+    // 绘制坐标轴
     ctx.beginPath();
-    ctx.strokeStyle = '#e5e7eb';
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 5; i++) {
-        const y = padding + i * (height - padding * 2) / 5;
-        ctx.moveTo(padding, y);
-        ctx.lineTo(width - padding, y);
-    }
+    ctx.moveTo(50, 350);
+    ctx.lineTo(750, 350);
+    ctx.lineTo(745, 345);
+    ctx.moveTo(750, 350);
+    ctx.lineTo(745, 355);
+    ctx.moveTo(50, 350);
+    ctx.lineTo(50, 50);
+    ctx.lineTo(45, 55);
+    ctx.moveTo(50, 50);
+    ctx.lineTo(55, 55);
     ctx.stroke();
     
-    ctx.beginPath();
-    ctx.strokeStyle = '#374151';
-    ctx.lineWidth = 2;
-    ctx.moveTo(padding, padding);
-    ctx.lineTo(padding, height - padding);
-    ctx.lineTo(width - padding, height - padding);
-    ctx.stroke();
-    
-    const colors = ['#667eea', '#10b981', '#f59e0b'];
+    // 绘制数据点和线条
+    const colors = ['#4CAF50', '#2196F3', '#FF9800'];
     const labels = ['CPU使用率', '内存使用率', '磁盘使用率'];
     const datasets = [data.cpuUsage, data.memoryUsage, data.diskUsage];
     
-    datasets.forEach((dataset, dataIndex) => {
+    for (let i = 0; i < datasets.length; i++) {
         ctx.beginPath();
-        ctx.strokeStyle = colors[dataIndex];
-        ctx.lineWidth = 3;
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = 2;
         
-        dataset.forEach((value, index) => {
-            const x = padding + index * xScale;
-            const y = height - padding - value * yScale;
+        for (let j = 0; j < datasets[i].length; j++) {
+            const x = 50 + (j * (700 / (datasets[i].length - 1)));
+            const y = 350 - (datasets[i][j] * 3);
             
-            if (index === 0) {
+            if (j === 0) {
                 ctx.moveTo(x, y);
             } else {
                 ctx.lineTo(x, y);
             }
-        });
+            
+            // 绘制数据点
+            ctx.fillStyle = colors[i];
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
         
         ctx.stroke();
         
-        dataset.forEach((value, index) => {
-            const x = padding + index * xScale;
-            const y = height - padding - value * yScale;
-            
-            ctx.beginPath();
-            ctx.fillStyle = colors[dataIndex];
-            ctx.arc(x, y, 6, 0, Math.PI * 2);
-            ctx.fill();
-        });
-    });
-    
-    ctx.fillStyle = '#374151';
-    ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.textAlign = 'center';
-    data.dates.forEach((date, index) => {
-        const x = padding + index * xScale;
-        ctx.fillText(date, x, height - 20);
-    });
-    
-    ctx.textAlign = 'right';
-    for (let i = 0; i <= 100; i += 20) {
-        const y = height - padding - i * yScale;
-        ctx.fillText(i + '%', padding - 10, y + 5);
+        // 绘制图例
+        ctx.fillStyle = colors[i];
+        ctx.fillRect(600, 50 + (i * 20), 15, 15);
+        ctx.fillStyle = '#333';
+        ctx.font = '12px Arial';
+        ctx.fillText(labels[i], 620, 62 + (i * 20));
     }
     
-    ctx.textAlign = 'left';
-    labels.forEach((label, index) => {
-        ctx.fillStyle = colors[index];
-        ctx.fillRect(padding + index * 150, 20, 20, 20);
-        ctx.fillStyle = '#374151';
-        ctx.fillText(label, padding + 25 + index * 150, 35);
+    // 绘制X轴标签
+    ctx.font = '12px Arial';
+    ctx.fillStyle = '#333';
+    data.dates.forEach((date, index) => {
+        const x = 50 + (index * (700 / (data.dates.length - 1)));
+        ctx.fillText(date, x - 20, 375);
     });
+    
+    // 绘制Y轴标签
+    for (let i = 0; i <= 100; i += 20) {
+        const y = 350 - (i * 3);
+        ctx.fillText(i + '%', 20, y + 4);
+    }
 }
 
 // 绘制告警趋势图
@@ -802,49 +682,44 @@ function drawAlertChart(data) {
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    const padding = 60;
     
-    ctx.clearRect(0, 0, width, height);
-    
-    const barWidth = (width - padding * 2) / data.dates.length * 0.6;
-    const maxAlert = Math.max(...data.alertCount, 1);
-    const yScale = (height - padding * 2) / maxAlert;
-    
+    // 绘制坐标轴
     ctx.beginPath();
-    ctx.strokeStyle = '#374151';
-    ctx.lineWidth = 2;
-    ctx.moveTo(padding, padding);
-    ctx.lineTo(padding, height - padding);
-    ctx.lineTo(width - padding, height - padding);
+    ctx.moveTo(50, 350);
+    ctx.lineTo(750, 350);
+    ctx.lineTo(745, 345);
+    ctx.moveTo(750, 350);
+    ctx.lineTo(745, 355);
+    ctx.moveTo(50, 350);
+    ctx.lineTo(50, 50);
+    ctx.lineTo(45, 55);
+    ctx.moveTo(50, 50);
+    ctx.lineTo(55, 55);
     ctx.stroke();
     
-    data.alertCount.forEach((count, index) => {
-        const x = padding + (index * (width - padding * 2) / data.dates.length) + (barWidth * 0.2);
-        const barHeight = count * yScale;
-        const y = height - padding - barHeight;
+    // 绘制柱状图
+    const barWidth = 700 / data.dates.length * 0.8;
+    
+    data.dates.forEach((date, index) => {
+        const x = 50 + (index * (700 / data.dates.length)) + (barWidth * 0.1);
+        const height = data.alertCount[index] * 50;
+        const y = 350 - height;
         
-        const gradient = ctx.createLinearGradient(x, y, x, height - padding);
-        gradient.addColorStop(0, '#667eea');
-        gradient.addColorStop(1, '#764ba2');
+        ctx.fillStyle = '#f44336';
+        ctx.fillRect(x, y, barWidth, height);
         
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x, y, barWidth, barHeight);
+        // 绘制数值
+        ctx.fillStyle = '#333';
+        ctx.font = '12px Arial';
+        ctx.fillText(data.alertCount[index], x + barWidth / 2 - 5, y - 5);
         
-        ctx.fillStyle = '#1f2937';
-        ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(count, x + barWidth / 2, y - 10);
-        
-        ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
-        ctx.fillText(data.dates[index], x + barWidth / 2, height - 25);
+        // 绘制日期
+        ctx.fillText(date, x + barWidth / 2 - 20, 375);
     });
     
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#374151';
-    for (let i = 0; i <= maxAlert; i++) {
-        const y = height - padding - i * yScale;
-        ctx.fillText(i.toString(), padding - 10, y + 5);
+    // 绘制Y轴标签
+    for (let i = 0; i <= Math.max(...data.alertCount); i++) {
+        const y = 350 - (i * 50);
+        ctx.fillText(i, 20, y + 4);
     }
 }

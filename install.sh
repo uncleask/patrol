@@ -1,99 +1,367 @@
 #!/bin/bash
+set -euo pipefail
 
-# 安装脚本 - Patrol 系统巡检工具
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+LOG_FILE="$SCRIPT_DIR/logs/install.log"
 
-# 获取脚本所在目录
-SCRIPT_DIR="$(dirname "$0")"
-cd "$SCRIPT_DIR"
+# 日志函数
+log_info() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] INFO: $1" >> "$LOG_FILE"
+    echo "[$timestamp] INFO: $1"
+}
 
-echo "=== Patrol 系统巡检工具安装 ==="
+log_error() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] ERROR: $1" >> "$LOG_FILE"
+    echo "[$timestamp] ERROR: $1" >&2
+}
 
-# 设置脚本执行权限
-echo "1. 设置脚本执行权限..."
-chmod +x patrol.sh remote_check.sh
+# 错误处理函数
+error_exit() {
+    log_error "$1"
+    exit 1
+}
 
-# 检查依赖工具
-echo "\n2. 检查依赖工具..."
-dependencies=(ssh scp jq vmstat free df ps awk)
-missing_deps=()
-
-for dep in "${dependencies[@]}"; do
-    if ! command -v "$dep" &> /dev/null; then
-        missing_deps+=("$dep")
-    else
-        echo "✓ $dep 已安装"
+# 检查命令是否存在
+check_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        return 1
     fi
-done
+    return 0
+}
 
-if [[ ${#missing_deps[@]} -gt 0 ]]; then
-    echo "\n⚠️  以下依赖工具未安装:"
-    for dep in "${missing_deps[@]}"; do
-        echo "  - $dep"
+# 下载 jq
+download_jq() {
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+    
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) echo "Unsupported architecture: $arch"; exit 1 ;;
+    esac
+    
+    local jq_url="https://github.com/jqlang/jq/releases/download/jq-1.7/jq-${os}-${arch}"
+    local jq_binary="$SCRIPT_DIR/bin/jq-${os}-${arch}"
+    
+    log_info "Downloading jq from $jq_url"
+    
+    if check_command curl; then
+        curl -s -o "$jq_binary" "$jq_url"
+    elif check_command wget; then
+        wget -q -O "$jq_binary" "$jq_url"
+    else
+        error_exit "wget or curl required"
+    fi
+    
+    chmod +x "$jq_binary"
+    
+    # 创建符号链接
+    ln -sf "$jq_binary" "$SCRIPT_DIR/bin/jq"
+    
+    log_info "jq installed to $jq_binary"
+}
+
+# 检查并下载 jq
+install_jq() {
+    # 1. 优先使用系统安装的 jq
+    if check_command jq; then
+        log_info "jq 命令已找到"
+        return 0
+    fi
+    
+    # 2. 检测当前系统架构
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+    
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) arch="amd64" ;;
+    esac
+    
+    local jq_binary="$SCRIPT_DIR/bin/jq-${os}-${arch}"
+    
+    # 3. 检查本地对应架构的 jq
+    if [ -f "$jq_binary" ] && [ -x "$jq_binary" ]; then
+        log_info "本地 jq 已存在: $jq_binary"
+        return 0
+    fi
+    
+    # 4. 检查通用 jq
+    if [ -f "$SCRIPT_DIR/bin/jq" ] && [ -x "$SCRIPT_DIR/bin/jq" ]; then
+        log_info "本地 jq 已存在: $SCRIPT_DIR/bin/jq"
+        return 0
+    fi
+    
+    # 5. 下载 jq
+    download_jq
+}
+
+# 创建目录结构
+create_directories() {
+    log_info "创建目录结构..."
+    
+    local dirs=(conf logs bin web)
+    for dir in "${dirs[@]}"; do
+        local dir_path="$SCRIPT_DIR/$dir"
+        if [ ! -d "$dir_path" ]; then
+            mkdir -p "$dir_path"
+            log_info "创建目录: $dir_path"
+        else
+            log_info "目录已存在: $dir_path"
+        fi
     done
-    echo "\n请安装这些依赖工具后再运行巡检工具"
-else
-    echo "\n✓ 所有依赖工具已安装"
-fi
+    
+    # 创建 web 子目录
+    local web_dirs=(web/css web/js web/data web/demo_data)
+    for dir in "${web_dirs[@]}"; do
+        local dir_path="$SCRIPT_DIR/$dir"
+        if [ ! -d "$dir_path" ]; then
+            mkdir -p "$dir_path"
+            log_info "创建目录: $dir_path"
+        else
+            log_info "目录已存在: $dir_path"
+        fi
+    done
+}
 
-# 检查 jq 工具
-echo "\n3. 检查 jq 工具..."
-if ! command -v jq &> /dev/null; then
-    echo "⚠️  jq 工具未安装，尝试从 bin 目录复制..."
-    if [[ -f "bin/jq" ]]; then
-        cp bin/jq /usr/local/bin/ 2>/dev/null || echo "⚠️  无法复制 jq 到 /usr/local/bin/，请手动安装"
+# 创建配置文件示例
+create_config_examples() {
+    log_info "创建配置文件示例..."
+    
+    # servers.conf.example
+    local servers_conf="$SCRIPT_DIR/conf/servers.conf.example"
+    if [ ! -f "$servers_conf" ]; then
+        cat > "$servers_conf" <<EOF
+# 服务器配置文件
+# 格式：别名:IP:端口:用户名:私钥路径:密码（可选）:检查项分组（可选）
+# 示例：
+web01:192.168.1.10:22:root:/home/patrol/.autopriv/patrol_rsa::group_1_1
+db01:192.168.1.20:22:mysqluser:/home/patrol/.autopriv/patrol_rsa:mypassword:group_1_2
+EOF
+        log_info "创建配置文件示例: $servers_conf"
     else
-        echo "⚠️  bin/jq 文件不存在，请手动安装 jq"
+        log_info "配置文件示例已存在: $servers_conf"
     fi
-else
-    echo "✓ jq 已安装"
-fi
+    
+    # checks.conf.example
+    local checks_conf="$SCRIPT_DIR/conf/checks.conf.example"
+    if [ ! -f "$checks_conf" ]; then
+        cat > "$checks_conf" <<EOF
+# 检查项配置文件
+# 格式：检查项名称:类型:执行命令
+# 说明：所有命令输出原始结果，由中心机解析
 
-# 创建必要的目录
-echo "\n4. 创建必要的目录..."
-mkdir -p output logs web
+# ============ 系统基础信息 ============
+system:system:cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '\"'
+kernel:system:uname -r
+architecture:system:uname -m
+uptime:system:uptime
 
-# 配置文件说明
-echo "\n5. 配置文件说明..."
-echo "请根据实际情况修改以下配置文件:"
-echo "  - conf/servers.conf    # 服务器配置"
-echo "  - conf/check_groups.conf  # 检查组配置"
-echo "  - conf/checks.conf     # 检查项配置"
+# ============ CPU 信息 ============
+cpu:cpu:top -bn1 | grep 'Cpu(s)'
+loadavg:system:uptime
 
-# SSH 免密登录设置
-echo "\n6. SSH 免密登录设置..."
-SSH_KEY_DIR="$SCRIPT_DIR/.ssh"
-SSH_KEY_FILE="$SSH_KEY_DIR/id_rsa"
+# ============ 内存信息 ============
+mem:mem:free -m
+swap:swap:free -m
 
-# 检查是否存在 SSH 密钥对
-if [[ ! -f "$SSH_KEY_FILE" ]]; then
-    echo "⚠️  未找到 SSH 密钥对，正在生成..."
-    mkdir -p "$SSH_KEY_DIR"
-    ssh-keygen -t rsa -b 2048 -f "$SSH_KEY_FILE" -N "" > /dev/null 2>&1
-    echo "✓ SSH 密钥对生成成功"
-else
-    echo "✓ SSH 密钥对已存在"
-fi
+# ============ 磁盘信息 ============
+disk:disk:df -h
+disk_root:disk:df -h /
+disk_home:disk:df -h /home
+disk_backups:disk:df -h /backups
+disk_nas:disk:df -h /mnt/nas
 
-# 显示公钥内容
-echo "\n7. SSH 公钥 (用于测试设备免密登录):"
-echo "--------------------------------------------------"
-cat "$SSH_KEY_FILE.pub"
-echo "--------------------------------------------------"
-echo "\n请将以上公钥添加到测试设备的 ~/.ssh/authorized_keys 文件中"
-echo "例如: ssh-copy-id -i $SSH_KEY_FILE.pub user@hostname"
+# ============ 详细信息检查 ============
+basic_info:detail:cat /etc/os-release
+cpu_detail:detail:top -bn1 | head -20
+memory_detail:detail:free -m -h
+disk_detail:detail:df -h
+apps_info:detail:ps aux | head -30
+dockers_info:detail:docker ps -a
 
-# 更新 servers.conf 配置
-echo "\n8. 更新 servers.conf 配置..."
-if [[ -f "conf/servers.conf" ]]; then
-    # 备份原始配置文件
-    cp "conf/servers.conf" "conf/servers.conf.bak"
-    # 更新密钥路径
-    sed -i "s|::password|:$SSH_KEY_FILE:password|g" "conf/servers.conf"
-    echo "✓ servers.conf 配置已更新，密钥路径: $SSH_KEY_FILE"
-else
-    echo "⚠️  conf/servers.conf 文件不存在，无法更新配置"
-fi
+# ============ 进程检查 ============
+nginx:vhost:ps aux | grep -E "(nginx|nginx:)" | grep -v grep
+mysql:vhost:ps aux | grep -E "(mysqld|mysql)" | grep -v grep
+redis:vhost:ps aux | grep redis-server | grep -v grep
+zookeeper:vhost:ps aux | grep -E "(zookeeper|QuorumPeerMain)" | grep -v grep
+memcached:vhost:ps aux | grep memcached | grep -v grep
+syslog:vhost:ps aux | grep syslogd | grep -v grep
+BT_Panel:vhost:ps aux | grep BT-Panel | grep -v grep
+BT_Task:vhost:ps aux | grep BT-Task | grep -v grep
 
-echo "\n=== 安装完成 ==="
-echo "使用方法: ./patrol.sh [选项]"
-echo "查看帮助: ./patrol.sh --help"
+# ============ Docker检查 ============
+kafka:docker:docker ps --filter "name=kafka"
+oracle_19c:docker:docker ps --filter "name=oracle"
+opengauss:docker:docker ps --filter "name=opengauss"
+cordys-crm:docker:docker ps --filter "name=cordys-crm"
+EOF
+        log_info "创建配置文件示例: $checks_conf"
+    else
+        log_info "配置文件示例已存在: $checks_conf"
+    fi
+    
+    # check_groups.conf.example
+    local check_groups_conf="$SCRIPT_DIR/conf/check_groups.conf.example"
+    if [ ! -f "$check_groups_conf" ]; then
+        cat > "$check_groups_conf" <<EOF
+# 检查项分组配置文件
+# 格式：分组名:检查项1,检查项2,...
+
+# 192.168.1.1 主机检查项分组
+group_1_1:nginx,system,kernel,uptime
+
+# 192.168.1.2 主机检查项分组
+group_1_2:mysql,redis,memcached,system,kernel,uptime
+
+# 192.168.1.3 主机检查项分组
+group_1_3:system,kernel,uptime
+
+# 192.168.1.4 主机检查项分组
+group_1_4:system,kernel,uptime
+
+# 通用检查项分组
+group_system:system,kernel,architecture,uptime
+group_resource:cpu,loadavg,mem,swap,disk,disk_root,disk_home
+group_apps:nginx,mysql,redis,memcached
+group_docker:kafka,oracle_19c,opengauss,cordys-crm
+EOF
+        log_info "创建配置文件示例: $check_groups_conf"
+    else
+        log_info "配置文件示例已存在: $check_groups_conf"
+    fi
+    
+    # 创建默认演示数据
+    local default_out="$SCRIPT_DIR/web/demo_data/default.out"
+    if [ ! -f "$default_out" ]; then
+        echo "这是默认输出" > "$default_out"
+        log_info "创建默认演示数据: $default_out"
+    else
+        log_info "默认演示数据已存在: $default_out"
+    fi
+}
+
+# 创建全局软链接
+create_symlink() {
+    if [ "$EUID" -eq 0 ]; then
+        log_info "创建全局软链接..."
+        local symlink_path="/usr/local/bin/patrol"
+        local target_path="$SCRIPT_DIR/patrol.sh"
+        
+        if [ -L "$symlink_path" ]; then
+            rm -f "$symlink_path"
+        fi
+        
+        ln -s "$target_path" "$symlink_path"
+        log_info "创建软链接: $symlink_path -> $target_path"
+    else
+        log_info "非 root 用户，跳过创建全局软链接"
+    fi
+}
+
+# 打印 SSH 密钥生成指引
+print_ssh_guide() {
+    # 创建默认的密钥存储目录
+    local key_dir="$HOME/patrol/.autopriv"
+    if [ ! -d "$key_dir" ]; then
+        mkdir -p "$key_dir"
+        log_info "创建密钥存储目录: $key_dir"
+    fi
+    
+    log_info "SSH 密钥生成指引："
+    echo ""
+    echo "========================================"
+    echo "SSH 密钥生成指引"
+    echo "========================================"
+    echo "1. 生成 SSH 密钥对："
+    echo "   ssh-keygen -t rsa -b 2048 -f $key_dir/patrol_rsa"
+    echo ""
+    echo "2. 推送公钥到目标服务器："
+    echo "   ssh-copy-id -i $key_dir/patrol_rsa.pub user@server"
+    echo ""
+    echo "3. 在 servers.conf 中配置私钥路径："
+    echo "   alias:ip:port:user:$key_dir/patrol_rsa:"
+    echo "========================================"
+    echo ""
+}
+
+# 主函数
+main() {
+    echo "开始安装 Patrol 系统巡检工具..."
+    
+    # 检查必要命令
+    log_info "检查必要命令..."
+    
+    if ! check_command ssh; then
+        error_exit "未找到 ssh 命令，请安装 OpenSSH"
+    fi
+    log_info "ssh 命令已找到"
+    
+    # 检查 sshpass（可选）
+    if check_command sshpass; then
+        log_info "sshpass 命令已找到"
+    else
+        log_info "未找到 sshpass 命令，将使用密钥认证"
+    fi
+    
+    # 检查或安装 jq
+    if check_command jq; then
+        log_info "jq 命令已找到"
+    else
+        install_jq
+    fi
+    
+    # 创建目录结构
+    create_directories
+    
+    # 创建密钥存储目录
+    local key_dir="$HOME/patrol/.autopriv"
+    if [ ! -d "$key_dir" ]; then
+        mkdir -p "$key_dir"
+        log_info "创建密钥存储目录: $key_dir"
+    else
+        log_info "密钥存储目录已存在: $key_dir"
+    fi
+    
+    # 创建配置文件示例
+    create_config_examples
+    
+    # 创建全局软链接
+    create_symlink
+    
+    # 打印 SSH 密钥生成指引
+    print_ssh_guide
+    
+    log_info "安装完成！"
+    echo ""
+    echo "========================================"
+    echo "Patrol 系统巡检工具安装完成"
+    echo "========================================"
+    echo "使用方法："
+    echo "1. 生成 SSH 密钥对："
+    echo "   ssh-keygen -t rsa -b 2048 -f $key_dir/patrol_rsa"
+    echo ""
+    echo "2. 推送公钥到目标服务器："
+    echo "   ssh-copy-id -i $key_dir/patrol_rsa.pub user@server"
+    echo ""
+    echo "3. 复制配置文件示例并修改："
+    echo "   cp conf/servers.conf.example conf/servers.conf"
+    echo "   cp conf/checks.conf.example conf/checks.conf"
+    echo "   cp conf/check_groups.conf.example conf/check_groups.conf"
+    echo ""
+    echo "4. 运行巡检："
+    echo "   ./patrol.sh"
+    echo ""
+    echo "5. 运行演示模式："
+    echo "   ./patrol.sh --demo"
+    echo ""
+    echo "6. 运行 Web 服务："
+    echo "   cd web && python -m http.server 8000"
+    echo "========================================"
+}
+
+# 运行主函数
+main

@@ -1,763 +1,744 @@
 #!/bin/bash
 
-# 中心机主脚本 - Patrol 系统巡检工具 (新版本)
+# ============================================
+# 系统巡检主脚本
+# 功能：自动巡检多台服务器，生成 HTML 和 TXT 报告
+# ============================================
 
-# 配置文件路径
-SCRIPT_DIR="$(dirname "$0")"
-CONFIG_DIR="$SCRIPT_DIR/conf"
-SERVERS_CONF="$CONFIG_DIR/servers.conf"
-GROUPS_CONF="$CONFIG_DIR/check_groups.conf"
-CHECKS_CONF="$CONFIG_DIR/checks.conf"
-APPS_CONF="$CONFIG_DIR/apps.conf"
-LOGS_CONF="$CONFIG_DIR/logs.conf"
+# 脚本目录
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 输出目录
-OUTPUT_DIR="$SCRIPT_DIR/output"
-REMOTE_SCRIPT="$SCRIPT_DIR/remote_collector.sh"
+# 配置目录
+CONF_DIR="$SCRIPT_DIR/conf"
+
+# 输出目录（改为 web/data 目录）
+OUTPUT_DIR="$SCRIPT_DIR/web/data"
 
 # 日志目录
-LOG_DIR="$SCRIPT_DIR/logs"
-mkdir -p "$LOG_DIR"
+LOGS_DIR="$SCRIPT_DIR/logs"
 
-# 临时文件目录
-TEMP_DIR="/tmp/patrol"
-mkdir -p "$TEMP_DIR"
+# 确保目录存在
+mkdir -p "$OUTPUT_DIR" "$LOGS_DIR"
 
-# 颜色定义
-RED="\033[31m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-NC="\033[0m"
-
-# 日志文件
-LOG_FILE="$LOG_DIR/patrol_$(date +%Y%m%d).log"
+# 默认配置文件
+SERVERS_FILE="$CONF_DIR/servers.conf"
+GROUPS_FILE="$CONF_DIR/check_groups.conf"
+CHECKS_FILE="$CONF_DIR/checks.conf"
 
 # 默认并发数
-PARALLEL=5
+PARALLEL=4
 
-# 帮助信息
-show_help() {
-    echo "Patrol 系统巡检工具"
-    echo "用法: $0 [选项]"
-    echo "选项:"
-    echo "  -h, --help          显示此帮助信息"
-    echo "  -g, --group GROUP   仅巡检指定组的服务器"
-    echo "  -o, --output FORMAT 输出格式 (json,html,txt,all)，默认 all"
-    echo "  --parallel NUM      并发线程数，默认 5"
-    echo "  -v, --verbose       显示详细输出"
-}
+log_info() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1" >&2; }
+log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1" >&2; }
 
 # 解析命令行参数
-parse_args() {
-    GROUP=""
-    OUTPUT_FORMAT="all"
-    VERBOSE=false
-    
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -h|--help)
-                show_help
-                exit 0
-                ;;
-            -g|--group)
-                GROUP="$2"
-                shift 2
-                ;;
-            -o|--output)
-                OUTPUT_FORMAT="$2"
-                shift 2
-                ;;
-            --parallel)
-                PARALLEL="$2"
-                shift 2
-                ;;
-            -v|--verbose)
-                VERBOSE=true
-                shift
-                ;;
-            *)
-                echo "未知选项: $1"
-                show_help
-                exit 1
-                ;;
-        esac
-    done
-}
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --servers=*)
+            SERVERS_FILE="${1#*=}"
+            ;;
+        --groups=*)
+            GROUPS_FILE="${1#*=}"
+            ;;
+        --checks=*)
+            CHECKS_FILE="${1#*=}"
+            ;;
+        *)
+            log_error "Unknown parameter: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
 
-# 读取服务器配置
-read_servers() {
-    if [[ ! -f "$SERVERS_CONF" ]]; then
-        echo -e "${RED}错误: 服务器配置文件 $SERVERS_CONF 不存在${NC}"
-        echo "错误: 服务器配置文件 $SERVERS_CONF 不存在" >> "$LOG_FILE"
-        exit 1
+log_info "Using configuration files:"
+log_info "  Servers: $SERVERS_FILE"
+log_info "  Groups: $GROUPS_FILE"
+log_info "  Checks: $CHECKS_FILE"
+
+# ============ 查找 jq 工具 ============
+find_jq() {
+    # 1. 优先使用系统安装的 jq
+    if command -v jq &>/dev/null; then
+        echo "$(command -v jq)"
+        return 0
     fi
     
-    PATROL_SERVERS=()
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
+    # 2. 检测当前系统架构
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+    
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) arch="amd64" ;;
+    esac
+    
+    local jq_binary="$SCRIPT_DIR/bin/jq-${os}-${arch}"
+    
+    # 3. 使用本地对应架构的 jq
+    if [ -f "$jq_binary" ] && [ -x "$jq_binary" ]; then
+        echo "$jq_binary"
+        return 0
+    fi
+    
+    # 4. 尝试通用 jq
+    if [ -f "$SCRIPT_DIR/bin/jq" ] && [ -x "$SCRIPT_DIR/bin/jq" ]; then
+        echo "$SCRIPT_DIR/bin/jq"
+        return 0
+    fi
+    
+    log_error "jq not found"
+    return 1
+}
+
+JQ_PATH=$(find_jq)
+if [ -z "$JQ_PATH" ]; then
+    log_error "jq not found or failed to download"
+    exit 1
+fi
+log_info "found jq: $JQ_PATH"
+
+# ============ 全局变量声明 ============
+declare -A SERVER_IP SERVER_PORT SERVER_USER SERVER_KEY SERVER_PASSWORD SERVER_GROUP
+declare -A GROUP_CHECKS
+declare -A CHECK_TYPE CHECK_COMMAND
+declare -A THRESHOLDS
+SERVERS=()
+GROUP_NAMES=()
+
+# ============ 解析服务器配置 ============
+parse_servers() {
+    [ ! -f "$SERVERS_FILE" ] && { log_error "$SERVERS_FILE not found"; return 1; }
+    
+    SERVERS=()
+    while IFS=':' read -r alias ip port user key password group; do
+        [[ -z "$alias" || "$alias" =~ ^# ]] && continue
+        SERVERS+=($alias)
+        SERVER_IP["$alias"]="$ip"
+        SERVER_PORT["$alias"]="$port"
+        SERVER_USER["$alias"]="$user"
+        SERVER_KEY["$alias"]="$key"
+        SERVER_PASSWORD["$alias"]="$password"
+        SERVER_GROUP["$alias"]="$group"
+        log_info "loaded: $alias ($ip)"
+    done < "$SERVERS_FILE"
+    log_info "total: ${#SERVERS[@]} servers"
+}
+
+# ============ 解析分组配置 ============
+parse_groups() {
+    [ ! -f "$GROUPS_FILE" ] && { log_error "$GROUPS_FILE not found"; return 1; }
+    
+    GROUP_NAMES=()
+    while IFS=':' read -r group checks; do
+        [[ -z "$group" || "$group" =~ ^# ]] && continue
+        GROUP_NAMES+=("$group")
+        GROUP_CHECKS["$group"]="$checks"
+    done < "$GROUPS_FILE"
+    log_info "loaded ${#GROUP_NAMES[@]} groups"
+}
+
+# ============ 解析检查项配置（包含阈值） ============
+parse_checks() {
+    [ ! -f "$CHECKS_FILE" ] && { log_error "$CHECKS_FILE not found"; return 1; }
+    
+    while IFS=':' read -r name type value; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
         
-        IFS=":" read -r alias ip port user key password group_tags <<< "$line"
-        
-        if [[ -n "$GROUP" ]]; then
-            if [[ " $group_tags " =~ " $GROUP " ]]; then
-                PATROL_SERVERS+=("$alias $ip $port $user $key $password $group_tags")
+        if [[ "$name" == "threshold" ]]; then
+            # threshold:cpu:70,85
+            local warn=$(echo "$value" | cut -d',' -f1)
+            local serious=$(echo "$value" | cut -d',' -f2)
+            THRESHOLDS["${type}_warn"]="$warn"
+            THRESHOLDS["${type}_serious"]="$serious"
+        else
+            CHECK_TYPE["$name"]="$type"
+            CHECK_COMMAND["$name"]="$value"
+        fi
+    done < "$CHECKS_FILE"
+}
+
+# ============ 生成主机配置（包含阈值、磁盘、应用） ============
+generate_host_config() {
+    local group="$1"
+    local checks="${GROUP_CHECKS[$group]}"
+    
+    [ -z "$checks" ] && { log_error "group $group not found"; return 1; }
+    
+    local config=""
+    
+    # 1. 写入阈值配置（使用 $'\n' 或直接 echo）
+    config+="# ============ 阈值配置 ============"$'\n'
+    config+="threshold:cpu:${THRESHOLDS[cpu_warn]:-70},${THRESHOLDS[cpu_serious]:-85}"$'\n'
+    config+="threshold:mem:${THRESHOLDS[mem_warn]:-70},${THRESHOLDS[mem_serious]:-85}"$'\n'
+    config+=$'\n'
+    
+    # 2. 写入磁盘阈值
+    config+="# ============ 磁盘阈值 ============"$'\n'
+    IFS=',' read -ra check_list <<< "$checks"
+    for check_name in "${check_list[@]}"; do
+        local type="${CHECK_TYPE[$check_name]}"
+        if [[ "$type" == "disk" ]]; then
+            local warn="${THRESHOLDS[${check_name}_warn]:-78}"
+            local serious="${THRESHOLDS[${check_name}_serious]:-90}"
+            config+="threshold:${check_name}:${warn},${serious}"$'\n'
+        fi
+    done
+    config+=$'\n'
+    
+    # 3. 写入磁盘命令
+    config+="# ============ 磁盘命令 ============"$'\n'
+    for check_name in "${check_list[@]}"; do
+        local type="${CHECK_TYPE[$check_name]}"
+        local cmd="${CHECK_COMMAND[$check_name]}"
+        if [[ "$type" == "disk" ]]; then
+            config+="${check_name}:disk:${cmd}"$'\n'
+        fi
+    done
+    config+=$'\n'
+    
+    # 4. 写入应用配置
+    config+="# ============ 应用配置 ============"$'\n'
+    for check_name in "${check_list[@]}"; do
+        local type="${CHECK_TYPE[$check_name]}"
+        local cmd="${CHECK_COMMAND[$check_name]}"
+        if [[ "$type" == "vhost" || "$type" == "docker" ]]; then
+            config+="${check_name}:${type}:${cmd}"$'\n'
+        fi
+    done
+    
+    echo "$config"
+}
+
+# ============ 确保远程环境就绪 ============
+ensure_remote_ready() {
+    local ip="$1" port="$2" user="$3" key="$4" password="$5"
+    
+    local ssh_cmd scp_cmd
+    local auth_success=false
+    
+    if [ -n "$key" ] && [ -f "$key" ]; then
+        ssh_cmd="ssh -p $port -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i $key"
+        scp_cmd="scp -P $port -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i $key"
+        auth_success=true
+    elif [ -n "$password" ]; then
+        if command -v sshpass &>/dev/null; then
+            ssh_cmd="sshpass -p $password ssh -p $port -o ConnectTimeout=10 -o StrictHostKeyChecking=no"
+            scp_cmd="sshpass -p $password scp -P $port -o ConnectTimeout=10 -o StrictHostKeyChecking=no"
+            auth_success=true
+        elif command -v expect &>/dev/null; then
+            # 使用 expect 进行密码认证
+            local temp_expect=$(mktemp)
+            cat > "$temp_expect" << 'EOF'
+#!/usr/bin/expect -f
+set timeout 30
+set ip [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+set command [lindex $argv 4]
+
+spawn ssh -p $port $user@$ip $command
+expect {
+    "password:" {
+        send "$password\r"
+        expect eof
+    }
+    "Are you sure you want to continue connecting" {
+        send "yes\r"
+        expect "password:" {
+            send "$password\r"
+            expect eof
+        }
+    }
+    eof {}
+}
+EOF
+            chmod +x "$temp_expect"
+            
+            # 测试连接
+            "$temp_expect" "$ip" "$port" "$user" "$password" "echo test" > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                auth_success=true
+                # 对于 expect，我们需要特殊处理
+                export EXPECT_SSH_SCRIPT="$temp_expect"
+            fi
+        fi
+    fi
+    
+    if [ "$auth_success" != "true" ]; then
+        log_error "no auth method for $ip"
+        return 1
+    fi
+    
+    # 获取远程 home 目录
+    local remote_home
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        remote_home=$($EXPECT_SSH_SCRIPT "$ip" "$port" "$user" "$password" "echo \$HOME" 2>&1 | tail -n 1)
+    else
+        remote_home=$($ssh_cmd "$user@$ip" "echo \$HOME" 2>/dev/null)
+    fi
+    
+    [ -z "$remote_home" ] && { log_error "failed to get remote home for $ip"; return 1; }
+    
+    local patrol_home="$remote_home/patrol"
+    
+    # 创建目录
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        "$EXPECT_SSH_SCRIPT" "$ip" "$port" "$user" "$password" "mkdir -p $patrol_home $patrol_home/bin" > /dev/null 2>&1
+    else
+        $ssh_cmd "$user@$ip" "mkdir -p $patrol_home $patrol_home/bin" 2>/dev/null
+    fi
+    
+    # 上传 remote_collector.sh
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        local temp_scp_expect=$(mktemp)
+        cat > "$temp_scp_expect" << 'EOF'
+#!/usr/bin/expect -f
+set timeout 30
+set ip [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+set src [lindex $argv 4]
+set dest [lindex $argv 5]
+
+spawn scp -P $port $src $user@$ip:$dest
+expect {
+    "password:" {
+        send "$password\r"
+        expect eof
+    }
+    "Are you sure you want to continue connecting" {
+        send "yes\r"
+        expect "password:" {
+            send "$password\r"
+            expect eof
+        }
+    }
+    eof {}
+}
+EOF
+        chmod +x "$temp_scp_expect"
+        "$temp_scp_expect" "$ip" "$port" "$user" "$password" "$SCRIPT_DIR/remote_collector.sh" "$patrol_home/remote_collector.sh" > /dev/null 2>&1
+        rm -f "$temp_scp_expect"
+    else
+        $scp_cmd "$SCRIPT_DIR/remote_collector.sh" "$user@$ip:$patrol_home/remote_collector.sh" 2>/dev/null
+    fi
+    
+    # 设置执行权限
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        "$EXPECT_SSH_SCRIPT" "$ip" "$port" "$user" "$password" "chmod +x $patrol_home/remote_collector.sh" > /dev/null 2>&1
+    else
+        $ssh_cmd "$user@$ip" "chmod +x $patrol_home/remote_collector.sh" 2>/dev/null
+    fi
+    
+    # 检查远程 jq
+    local remote_jq=""
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        local jq_check=$($EXPECT_SSH_SCRIPT "$ip" "$port" "$user" "$password" "command -v jq" 2>&1)
+        if [ -n "$jq_check" ]; then
+            remote_jq=$(echo "$jq_check" | tail -n 1)
+        fi
+    else
+        if $ssh_cmd "$user@$ip" "command -v jq" 2>/dev/null; then
+            remote_jq=$($ssh_cmd "$user@$ip" "command -v jq" 2>/dev/null)
+        fi
+    fi
+    
+    # 检查本地 jq
+    if [ -z "$remote_jq" ]; then
+        local remote_local_jq="$patrol_home/bin/jq"
+        if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+            local jq_test=$($EXPECT_SSH_SCRIPT "$ip" "$port" "$user" "$password" "test -f $remote_local_jq" 2>&1)
+            if [ $? -eq 0 ]; then
+                remote_jq="$remote_local_jq"
             fi
         else
-            PATROL_SERVERS+=("$alias $ip $port $user $key $password $group_tags")
+            if $ssh_cmd "$user@$ip" "test -f $remote_local_jq" 2>/dev/null; then
+                remote_jq="$remote_local_jq"
+            fi
         fi
-    done < "$SERVERS_CONF"
-    
-    if [[ ${#PATROL_SERVERS[@]} -eq 0 ]]; then
-        echo -e "${YELLOW}警告: 没有找到符合条件的服务器${NC}"
-        echo "警告: 没有找到符合条件的服务器" >> "$LOG_FILE"
-        exit 0
     fi
     
-    echo "INFO: 读取到 ${#PATROL_SERVERS[@]} 台服务器" >> "$LOG_FILE"
-}
+    # 上传 jq
+    if [ -z "$remote_jq" ]; then
+        if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+            local temp_scp_expect=$(mktemp)
+            cat > "$temp_scp_expect" << 'EOF'
+#!/usr/bin/expect -f
+set timeout 30
+set ip [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+set src [lindex $argv 4]
+set dest [lindex $argv 5]
 
-# 读取检查组配置
-read_groups() {
-    echo "INFO: 检查组配置读取" >> "$LOG_FILE"
+spawn scp -P $port $src $user@$ip:$dest
+expect {
+    "password:" {
+        send "$password\r"
+        expect eof
+    }
+    "Are you sure you want to continue connecting" {
+        send "yes\r"
+        expect "password:" {
+            send "$password\r"
+            expect eof
+        }
+    }
+    eof {}
 }
-
-# 读取检查项配置
-read_checks() {
-    echo "INFO: 检查项配置读取" >> "$LOG_FILE"
-}
-
-# 执行远程检查
-execute_remote_check() {
-    local server_info="$1"
-    read -r alias ip port user key password group_tags <<< "$server_info"
+EOF
+            chmod +x "$temp_scp_expect"
+            "$temp_scp_expect" "$ip" "$port" "$user" "$password" "$JQ_PATH" "$patrol_home/bin/jq" > /dev/null 2>&1
+            rm -f "$temp_scp_expect"
+            
+            "$EXPECT_SSH_SCRIPT" "$ip" "$port" "$user" "$password" "chmod +x $patrol_home/bin/jq" > /dev/null 2>&1
+        else
+            $ssh_cmd "$user@$ip" "mkdir -p $patrol_home/bin" 2>/dev/null
+            $scp_cmd "$JQ_PATH" "$user@$ip:$patrol_home/bin/jq" 2>/dev/null
+            $ssh_cmd "$user@$ip" "chmod +x $patrol_home/bin/jq" 2>/dev/null
+        fi
+        remote_jq="$patrol_home/bin/jq"
+    fi
     
-    local result_file="$TEMP_DIR/${alias}_result.json"
-    local remote_script="/tmp/remote_collector.sh"
-    local remote_checks="/tmp/checks.conf"
+    # 清理临时文件
+    if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+        rm -f "$EXPECT_SSH_SCRIPT"
+        unset EXPECT_SSH_SCRIPT
+    fi
     
-    if [[ "$ip" == "127.0.0.1" ]]; then
+    echo "$remote_jq"
+}
+
+# ============ 采集单台服务器 ============
+collect_server() {
+    local alias="$1" ip="$2" port="$3" user="$4" key="$5" password="$6" group="$7"
+    
+    log_info "collecting: $alias ($ip)"
+    
+    # 获取当前主机IP和用户
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local current_user=$(whoami)
+    
+    if [[ "$ip" == "127.0.0.1" || ("$ip" == "$current_ip" && "$user" == "$current_user") ]]; then
         # 本地服务器，直接执行
-        echo "INFO: 开始本地服务器检查: $alias" >> "$LOG_FILE"
+        log_info "本地服务器，直接执行检查: $alias"
         
-        bash "$REMOTE_SCRIPT" "$CHECKS_CONF" > "$result_file" 2>/dev/null
+        local config_content=$(generate_host_config "$group")
+        [ -z "$config_content" ] && { echo '{"error": true, "alias": "'"$alias"'", "ip": "'"$ip"'"}'; return 1; }
         
-        if [[ $? -ne 0 ]]; then
-            echo -e "${RED}错误: 无法执行本地检查${NC}"
-            echo "错误: 无法执行本地检查" >> "$LOG_FILE"
-            return 1
+        local temp_config=$(mktemp)
+        echo "$config_content" > "$temp_config"
+        
+        local result=$(bash "$SCRIPT_DIR/remote_collector.sh" "$temp_config" 2>&1)
+        local json_result=$(echo "$result" | awk '/^\{/{flag=1} flag{print} /^\}/{flag=0}')
+        
+        rm -f "$temp_config"
+        
+        if echo "$json_result" | "$JQ_PATH" . >/dev/null 2>&1; then
+            echo "$json_result"
+        else
+            echo "{\"error\": true, \"alias\": \"$alias\", \"ip\": \"$ip\"}"
         fi
         
-        if [[ "$VERBOSE" == true ]]; then
-            echo -e "${GREEN}完成: 本地服务器 $alias 检查${NC}"
-        fi
-        echo "INFO: 完成本地服务器 $alias 检查" >> "$LOG_FILE"
-        
+        log_info "完成本地服务器 $alias 检查"
         return 0
     else
         # 远程服务器，使用 SSH
-        scp -i "$key" -P "$port" "$REMOTE_SCRIPT" "$CHECKS_CONF" "$user@$ip:/tmp/" > /dev/null 2>&1
-        if [[ $? -ne 0 ]]; then
-            echo -e "${RED}错误: 无法复制文件到服务器 $alias ($ip)${NC}"
-            echo "错误: 无法复制文件到服务器 $alias ($ip)" >> "$LOG_FILE"
+        local auth_success=false
+        local ssh_cmd=""
+        local scp_cmd=""
+        
+        # 1. 优先使用密钥认证
+        if [[ -n "$key" && -f "$key" ]]; then
+            log_info "尝试使用密钥认证连接服务器 $alias ($ip)"
+            ssh_cmd="ssh -p $port -o StrictHostKeyChecking=no -i $key"
+            scp_cmd="scp -p $port -o StrictHostKeyChecking=no -i $key"
+            
+            # 确保远程环境准备就绪
+            local remote_jq=$(ensure_remote_ready "$ip" "$port" "$user" "$key" "$password")
+            if [ -n "$remote_jq" ]; then
+                auth_success=true
+            fi
+        fi
+        
+        # 2. 如果密钥认证失败或未配置密钥，尝试密码认证
+        if [[ "$auth_success" == false && -n "$password" ]]; then
+            log_info "尝试使用密码认证连接服务器 $alias ($ip)"
+            
+            # 检查 sshpass 是否存在
+            if command -v sshpass &>/dev/null; then
+                ssh_cmd="sshpass -p $password ssh -p $port -o StrictHostKeyChecking=no"
+                scp_cmd="sshpass -p $password scp -p $port -o StrictHostKeyChecking=no"
+                
+                # 确保远程环境准备就绪
+                local remote_jq=$(ensure_remote_ready "$ip" "$port" "$user" "$key" "$password")
+                if [ -n "$remote_jq" ]; then
+                    auth_success=true
+                fi
+            else
+                # 检查 expect 是否存在
+                if command -v expect &>/dev/null; then
+                    log_info "使用 expect 进行密码认证"
+                    # 使用 expect 确保远程环境准备就绪
+                    local remote_jq=$(ensure_remote_ready "$ip" "$port" "$user" "$key" "$password")
+                    if [ -n "$remote_jq" ]; then
+                        auth_success=true
+                    fi
+                else
+                    log_error "sshpass 和 expect 工具都未安装，无法使用密码认证"
+                    return 1
+                fi
+            fi
+        fi
+        
+        # 3. 认证失败处理
+        if [[ "$auth_success" == false ]]; then
+            log_error "无法连接到服务器 $alias ($ip)，认证失败"
             return 1
         fi
         
-        ssh -i "$key" -p "$port" "$user@$ip" "chmod +x /tmp/remote_collector.sh" > /dev/null 2>&1
-        ssh -i "$key" -p "$port" "$user@$ip" "/tmp/remote_collector.sh /tmp/checks.conf" > "$result_file" 2>&1
+        # 4. 生成配置并执行检查
+        local config_content=$(generate_host_config "$group")
+        [ -z "$config_content" ] && { echo '{"error": true, "alias": "'"$alias"'", "ip": "'"$ip"'"}'; return 1; }
         
-        if [[ $? -ne 0 ]]; then
-            echo -e "${RED}错误: 无法执行远程检查在服务器 $alias ($ip)${NC}"
-            echo "错误: 无法执行远程检查在服务器 $alias ($ip)" >> "$LOG_FILE"
-            return 1
+        local remote_home=$($ssh_cmd "$user@$ip" "echo \$HOME" 2>/dev/null)
+        local patrol_home="$remote_home/patrol"
+        
+        # 写入配置文件
+        if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+            # 使用 expect 写入配置文件
+            local temp_config=$(mktemp)
+            echo "$config_content" > "$temp_config"
+            local temp_scp_expect=$(mktemp)
+            cat > "$temp_scp_expect" << 'EOF'
+#!/usr/bin/expect -f
+set timeout 30
+set ip [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+set src [lindex $argv 4]
+set dest [lindex $argv 5]
+
+spawn scp -P $port $src $user@$ip:$dest
+expect {
+    "password:" {
+        send "$password\r"
+        expect eof
+    }
+    "Are you sure you want to continue connecting" {
+        send "yes\r"
+        expect "password:" {
+            send "$password\r"
+            expect eof
+        }
+    }
+    eof {}
+}
+EOF
+            chmod +x "$temp_scp_expect"
+            "$temp_scp_expect" "$ip" "$port" "$user" "$password" "$temp_config" "$patrol_home/host_${ip}_patrol.conf" > /dev/null 2>&1
+            rm -f "$temp_config" "$temp_scp_expect"
+        else
+            # 使用标准 ssh 写入配置文件
+            echo "$config_content" | $ssh_cmd "$user@$ip" "cat > $patrol_home/host_${ip}_patrol.conf" 2>/dev/null
         fi
         
-        ssh -i "$key" -p "$port" "$user@$ip" "rm -f /tmp/remote_collector.sh /tmp/checks.conf" > /dev/null 2>&1
+        # 执行远程检查
+        local result
+        if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+            # 使用 expect 执行远程检查
+            result=$($EXPECT_SSH_SCRIPT "$ip" "$port" "$user" "$password" "cd $patrol_home && ./remote_collector.sh" 2>&1)
+        else
+            # 使用标准 ssh 执行远程检查
+            result=$($ssh_cmd "$user@$ip" "cd $patrol_home && ./remote_collector.sh" 2>&1)
+        fi
+        
+        local json_result=$(echo "$result" | awk '/^\{/{flag=1} flag{print} /^\}/{flag=0}')
+        
+        if echo "$json_result" | "$JQ_PATH" . >/dev/null 2>&1; then
+            echo "$json_result"
+        else
+            echo "{\"error\": true, \"alias\": \"$alias\", \"ip\": \"$ip\"}"
+        fi
+        
+        # 清理临时文件
+        if [ -n "$EXPECT_SSH_SCRIPT" ]; then
+            rm -f "$EXPECT_SSH_SCRIPT"
+            unset EXPECT_SSH_SCRIPT
+        fi
+        
+        log_info "完成服务器 $alias ($ip) 检查"
+        return 0
     fi
-    
-    if [[ "$VERBOSE" == true ]]; then
-        echo -e "${GREEN}完成: 服务器 $alias ($ip) 检查${NC}"
-    fi
-    echo "INFO: 完成服务器 $alias ($ip) 检查" >> "$LOG_FILE"
-    
-    return 0
 }
 
-# 并发执行检查
-run_parallel_checks() {
-    local server_count=${#PATROL_SERVERS[@]}
-    local running=0
-    
-    echo -e "${GREEN}开始巡检 ${server_count} 台服务器...${NC}"
-    echo "INFO: 开始巡检 ${server_count} 台服务器，并发数: $PARALLEL" >> "$LOG_FILE"
-    
-    for server_info in "${PATROL_SERVERS[@]}"; do
-        while [[ $running -ge $PARALLEL ]]; do
-            sleep 1
-            running=$(jobs -r | wc -l)
-        done
-        
-        execute_remote_check "$server_info" &
-        running=$((running + 1))
-        
-        wait -n 2>/dev/null && running=$((running - 1))
-    done
-    
-    wait
-    
-    echo -e "${GREEN}所有服务器检查完成${NC}"
-    echo "INFO: 所有服务器检查完成" >> "$LOG_FILE"
-}
-
-# 生成HTML报告
+# ============ 生成 HTML 报告 ============
 generate_html_report() {
-    local json_report="$1"
-    local html_report="${json_report%.json}.html"
+    local json_file="$1"
+    local html_file="${json_file%.json}.html"
+    local json_data=$(cat "$json_file" | "$JQ_PATH" -c '.')
     
-    cat > "$html_report" <<EOF
+    cat > "$html_file" << EOF
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系统巡检报告</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
-        h1 { color: #333; text-align: center; }
-        h2 { color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 8px; }
-        h3 { color: #444; }
-        .server { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .summary { background: #e8f4f8; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .alarm { color: #ff9800; font-weight: bold; }
-        .serious { color: #f44336; font-weight: bold; }
-        .normal { color: #4CAF50; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        table, th, td { border: 1px solid #ddd; }
-        th, td { padding: 10px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .section { margin: 20px 0; }
-        .card { background: #fafafa; padding: 15px; border-radius: 5px; margin: 10px 0; border-left: 4px solid #0066cc; }
-        .result-summary { background: #fff3cd; padding: 15px; border-radius: 5px; margin: 10px 0; border: 1px solid #ffeaa7; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { text-align: center; color: #333; }
+        .server { margin: 20px 0; border: 1px solid #ddd; border-radius: 5px; overflow: hidden; }
+        .server-title { background: #343a40; color: white; padding: 10px 15px; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f2f2f2; }
+        .normal { color: green; }
+        .warn { color: orange; }
+        .serious { color: red; }
+        .error { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px; padding: 15px; margin: 20px 0; }
     </style>
 </head>
 <body>
-    <h1>系统巡检报告</h1>
-    <div class="summary">
-        <p>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</p>
-        <p>巡检服务器数量: ${#PATROL_SERVERS[@]}</p>
+    <div class="container">
+        <h1>系统巡检报告</h1>
+        <div id="report-content"></div>
     </div>
-EOF
-
-    local server_count=$(jq -r '.servers | length' "$json_report" 2>/dev/null || echo 0)
-    for ((i=0; i<server_count; i++)); do
-        local alias=$(jq -r ".servers[$i].alias" "$json_report" 2>/dev/null || echo "N/A")
-        local ip=$(jq -r ".servers[$i].ip" "$json_report" 2>/dev/null || echo "N/A")
-        local group_tags=$(jq -r ".servers[$i].groups" "$json_report" 2>/dev/null || echo "N/A")
+    <script>
+        const data = $json_data;
+        const content = document.getElementById("report-content");
         
-        # 新结构的服务器信息
-        local server_info=$(jq -r ".servers[$i].results[0]" "$json_report" 2>/dev/null)
-        
-        if [[ -n "$server_info" ]]; then
-            local time=$(echo "$server_info" | jq -r '.time' 2>/dev/null || echo "N/A")
-            local hostip=$(echo "$server_info" | jq -r '.hostip' 2>/dev/null || echo "N/A")
-            local hostname=$(echo "$server_info" | jq -r '.hostname' 2>/dev/null || echo "N/A")
-            local os=$(echo "$server_info" | jq -r '.os' 2>/dev/null || echo "N/A")
-            local uptimesince=$(echo "$server_info" | jq -r '.uptimesince' 2>/dev/null || echo "N/A")
-            local uptimeduration=$(echo "$server_info" | jq -r '.uptimeduration' 2>/dev/null || echo "N/A")
+        data.forEach(server => {
+            if (server.error) {
+                const errorDiv = document.createElement("div");
+                errorDiv.className = "error";
+                errorDiv.innerHTML = "<h3>错误</h3><p>服务器: " + (server.alias || server.ip) + "</p>";
+                content.appendChild(errorDiv);
+                return;
+            }
             
-            # CPU信息
-            local cpu_usage=$(echo "$server_info" | jq -r '.cpu.usage' 2>/dev/null || echo "N/A")
-            local cpu_sysusage=$(echo "$server_info" | jq -r '.cpu.sysusage' 2>/dev/null || echo "N/A")
-            local cpu_idle=$(echo "$server_info" | jq -r '.cpu.idle' 2>/dev/null || echo "N/A")
-            local cpu_iowait=$(echo "$server_info" | jq -r '.cpu.iowait' 2>/dev/null || echo "N/A")
-            local cpu_avgload=$(echo "$server_info" | jq -r '.cpu.avgload' 2>/dev/null || echo "N/A")
-            local cpu_usestate=$(echo "$server_info" | jq -r '.cpu.usestate' 2>/dev/null || echo "normal")
-            
-            # 内存信息
-            local mem_total=$(echo "$server_info" | jq -r '.memory.total' 2>/dev/null || echo "N/A")
-            local mem_used=$(echo "$server_info" | jq -r '.memory.used' 2>/dev/null || echo "N/A")
-            local mem_free=$(echo "$server_info" | jq -r '.memory.free' 2>/dev/null || echo "N/A")
-            local mem_available=$(echo "$server_info" | jq -r '.memory.available' 2>/dev/null || echo "N/A")
-            local mem_usage=$(echo "$server_info" | jq -r '.memory.usage' 2>/dev/null || echo "N/A")
-            local mem_usestate=$(echo "$server_info" | jq -r '.memory.usestate' 2>/dev/null || echo "normal")
-            local swap_total=$(echo "$server_info" | jq -r '.memory.swaptotal' 2>/dev/null || echo "N/A")
-            local swap_used=$(echo "$server_info" | jq -r '.memory.swapused' 2>/dev/null || echo "N/A")
-            local swap_free=$(echo "$server_info" | jq -r '.memory.swapfree' 2>/dev/null || echo "N/A")
-            local swap_usage=$(echo "$server_info" | jq -r '.memory.swapusage' 2>/dev/null || echo "N/A")
-            local swap_usestate=$(echo "$server_info" | jq -r '.memory.swapusestate' 2>/dev/null || echo "normal")
-            
-            # 结果信息
-            local all_count=$(echo "$server_info" | jq -r '.result.all_count' 2>/dev/null || echo "N/A")
-            local normal_count=$(echo "$server_info" | jq -r '.result.normal_count' 2>/dev/null || echo "N/A")
-            local warn_count=$(echo "$server_info" | jq -r '.result.warn_count' 2>/dev/null || echo "N/A")
-            local serious_count=$(echo "$server_info" | jq -r '.result.serious_count' 2>/dev/null || echo "N/A")
-            local description=$(echo "$server_info" | jq -r '.result.description' 2>/dev/null || echo "N/A")
-            
-            cat >> "$html_report" <<EOF
-    <div class="server">
-        <h2>服务器: $alias ($ip)</h2>
-        <p>所属组: $group_tags</p>
-        <p>巡检时间: $time</p>
-        
-        <div class="result-summary">
-            <h3>巡检结果</h3>
-            <p>总检查项: $all_count | 正常: $normal_count | 警告: $warn_count | 严重: $serious_count</p>
-            <p>状态描述: $description</p>
-        </div>
-        
-        <div class="section">
-            <h3>系统信息</h3>
-            <div class="card">
-                <p>主机名: $hostname</p>
-                <p>IP地址: $hostip</p>
-                <p>操作系统: $os</p>
-                <p>系统启动时间: $uptimesince</p>
-                <p>运行时长: $uptimeduration</p>
-            </div>
-        </div>
-        
-        <div class="section">
-            <h3>资源信息</h3>
-            <div class="card">
-                <h4>CPU信息</h4>
-                <p>使用率: <span class="$cpu_usestate">$cpu_usage%</span></p>
-                <p>系统使用率: $cpu_sysusage%</p>
-                <p>空闲率: $cpu_idle%</p>
-                <p>IO等待: $cpu_iowait%</p>
-                <p>平均负载: $cpu_avgload</p>
-            </div>
-            
-            <div class="card">
-                <h4>内存信息</h4>
-                <p>总内存: ${mem_total}MB</p>
-                <p>已用内存: ${mem_used}MB</p>
-                <p>空闲内存: ${mem_free}MB</p>
-                <p>可用内存: ${mem_available}MB</p>
-                <p>使用率: <span class="$mem_usestate">$mem_usage%</span></p>
-                <p>交换空间: ${swap_total}MB / 已用: ${swap_used}MB / 空闲: ${swap_free}MB</p>
-            </div>
-            
-            <h4>磁盘信息</h4>
-            <table>
-                <tr>
-                    <th>挂载点</th>
-                    <th>文件系统</th>
-                    <th>总大小</th>
-                    <th>已用</th>
-                    <th>可用</th>
-                    <th>使用率</th>
-                    <th>状态</th>
-                </tr>
-EOF
-
-            local disk_count=$(echo "$server_info" | jq -r '.disk | length' 2>/dev/null || echo 0)
-            for ((j=0; j<disk_count; j++)); do
-                local mounted=$(echo "$server_info" | jq -r ".disk[$j].mounted" 2>/dev/null || echo "N/A")
-                local filesystem=$(echo "$server_info" | jq -r ".disk[$j].filesystem" 2>/dev/null || echo "N/A")
-                local total=$(echo "$server_info" | jq -r ".disk[$j].total" 2>/dev/null || echo "N/A")
-                local used=$(echo "$server_info" | jq -r ".disk[$j].used" 2>/dev/null || echo "N/A")
-                local available=$(echo "$server_info" | jq -r ".disk[$j].available" 2>/dev/null || echo "N/A")
-                local usage=$(echo "$server_info" | jq -r ".disk[$j].usage" 2>/dev/null || echo "N/A")
-                local usestate=$(echo "$server_info" | jq -r ".disk[$j].usestate" 2>/dev/null || echo "normal")
-                
-                cat >> "$html_report" <<EOF
-                <tr>
-                    <td>$mounted</td>
-                    <td>$filesystem</td>
-                    <td>$total</td>
-                    <td>$used</td>
-                    <td>$available</td>
-                    <td>$usage%</td>
-                    <td><span class="$usestate">$usestate</span></td>
-                </tr>
-EOF
-            done
-            
-            cat >> "$html_report" <<EOF
-            </table>
-        </div>
-        
-        <div class="section">
-            <h3>应用状态</h3>
-            <table>
-                <tr>
-                    <th>应用名称</th>
-                    <th>类型</th>
-                    <th>用户</th>
-                    <th>进程ID</th>
-                    <th>状态</th>
-                    <th>CPU使用率</th>
-                    <th>内存使用率</th>
-                    <th>运行时长</th>
-                </tr>
-EOF
-
-            local apps_count=$(echo "$server_info" | jq -r '.apps | length' 2>/dev/null || echo 0)
-            for ((j=0; j<apps_count; j++)); do
-                local app_name=$(echo "$server_info" | jq -r ".apps[$j].name" 2>/dev/null || echo "N/A")
-                local app_type=$(echo "$server_info" | jq -r ".apps[$j].type" 2>/dev/null || echo "N/A")
-                local app_user=$(echo "$server_info" | jq -r ".apps[$j].user" 2>/dev/null || echo "N/A")
-                local app_pid=$(echo "$server_info" | jq -r ".apps[$j].pid" 2>/dev/null || echo "N/A")
-                local app_state=$(echo "$server_info" | jq -r ".apps[$j].state" 2>/dev/null || echo "N/A")
-                local app_cpuusage=$(echo "$server_info" | jq -r ".apps[$j].cpuusage" 2>/dev/null || echo "N/A")
-                local app_memusage=$(echo "$server_info" | jq -r ".apps[$j].memusage" 2>/dev/null || echo "N/A")
-                local app_runtime=$(echo "$server_info" | jq -r ".apps[$j].runtime" 2>/dev/null || echo "N/A")
-                
-                local status_class=""
-                if [[ "$app_state" == "running" ]]; then
-                    status_class="normal"
-                else
-                    status_class="serious"
-                fi
-                
-                cat >> "$html_report" <<EOF
-                <tr>
-                    <td>$app_name</td>
-                    <td>$app_type</td>
-                    <td>$app_user</td>
-                    <td>$app_pid</td>
-                    <td><span class="$status_class">$app_state</span></td>
-                    <td>${app_cpuusage}${app_cpuusage:+%}</td>
-                    <td>${app_memusage}${app_memusage:+%}</td>
-                    <td>$app_runtime</td>
-                </tr>
-EOF
-            done
-            
-            cat >> "$html_report" <<EOF
-            </table>
-        </div>
-        
-        <div class="section">
-            <h3>Docker容器状态</h3>
-            <table>
-                <tr>
-                    <th>容器名称</th>
-                    <th>容器ID</th>
-                    <th>状态</th>
-                    <th>详细状态</th>
-                </tr>
-EOF
-
-            local dockers_count=$(echo "$server_info" | jq -r '.dockers | length' 2>/dev/null || echo 0)
-            for ((j=0; j<dockers_count; j++)); do
-                local docker_name=$(echo "$server_info" | jq -r ".dockers[$j].name" 2>/dev/null || echo "N/A")
-                local docker_id=$(echo "$server_info" | jq -r ".dockers[$j].id" 2>/dev/null || echo "N/A")
-                local docker_state=$(echo "$server_info" | jq -r ".dockers[$j].state" 2>/dev/null || echo "N/A")
-                local docker_status=$(echo "$server_info" | jq -r ".dockers[$j].status" 2>/dev/null || echo "N/A")
-                
-                local status_class=""
-                if [[ "$docker_state" == "running" ]]; then
-                    status_class="normal"
-                elif [[ "$docker_state" == "not_found" ]]; then
-                    status_class="serious"
-                else
-                    status_class="alarm"
-                fi
-                
-                cat >> "$html_report" <<EOF
-                <tr>
-                    <td>$docker_name</td>
-                    <td>$docker_id</td>
-                    <td><span class="$status_class">$docker_state</span></td>
-                    <td>$docker_status</td>
-                </tr>
-EOF
-            done
-            
-            cat >> "$html_report" <<EOF
-            </table>
-        </div>
-    </div>
-EOF
-        fi
-    done
-
-    cat >> "$html_report" <<EOF
+            const serverDiv = document.createElement("div");
+            serverDiv.className = "server";
+            serverDiv.innerHTML = \`
+                <div class="server-title">\${server.hostname || server.hostip} (\${server.hostip})</div>
+                <div style="padding:15px">
+                    <p><strong>系统:</strong> \${server.os || "N/A"}</p>
+                    <p><strong>运行时间:</strong> \${server.uptimeduration || "N/A"}</p>
+                    <p><strong>CPU使用率:</strong> \${server.cpu?.usage || "N/A"}% 
+                        <span class="\${server.cpu?.usestate || "normal"}">(\${server.cpu?.usestate || "normal"})</span>
+                    </p>
+                    <p><strong>内存使用率:</strong> \${server.memory?.usage || "N/A"}% 
+                        <span class="\${server.memory?.usestate || "normal"}">(\${server.memory?.usestate || "normal"})</span>
+                    </p>
+                </div>
+            \`;
+            content.appendChild(serverDiv);
+        });
+    </script>
 </body>
 </html>
 EOF
-
-    echo -e "${GREEN}HTML 报告生成: $html_report${NC}"
-    echo "INFO: HTML 报告生成: $html_report" >> "$LOG_FILE"
+    log_info "HTML report: $html_file"
 }
 
-# 生成TXT报告
+# ============ 生成 TXT 报告 ============
 generate_txt_report() {
-    local json_report="$1"
-    local txt_report="${json_report%.json}.txt"
+    local json_file="$1"
+    local txt_file="${json_file%.json}.txt"
     
-    cat > "$txt_report" <<EOF
-==================================================
+    cat > "$txt_file" << EOF
 系统巡检报告
-==================================================
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-巡检服务器数量: ${#PATROL_SERVERS[@]}
-==================================================
-
+========================================
 EOF
-
-    local server_count=$(jq -r '.servers | length' "$json_report" 2>/dev/null || echo 0)
-    for ((i=0; i<server_count; i++)); do
-        local alias=$(jq -r ".servers[$i].alias" "$json_report" 2>/dev/null || echo "N/A")
-        local ip=$(jq -r ".servers[$i].ip" "$json_report" 2>/dev/null || echo "N/A")
-        local group_tags=$(jq -r ".servers[$i].groups" "$json_report" 2>/dev/null || echo "N/A")
-        
-        # 新结构的服务器信息
-        local server_info=$(jq -r ".servers[$i].results[0]" "$json_report" 2>/dev/null)
-        
-        if [[ -n "$server_info" ]]; then
-            local time=$(echo "$server_info" | jq -r '.time' 2>/dev/null || echo "N/A")
-            local hostip=$(echo "$server_info" | jq -r '.hostip' 2>/dev/null || echo "N/A")
-            local hostname=$(echo "$server_info" | jq -r '.hostname' 2>/dev/null || echo "N/A")
-            local os=$(echo "$server_info" | jq -r '.os' 2>/dev/null || echo "N/A")
-            local uptimesince=$(echo "$server_info" | jq -r '.uptimesince' 2>/dev/null || echo "N/A")
-            local uptimeduration=$(echo "$server_info" | jq -r '.uptimeduration' 2>/dev/null || echo "N/A")
-            
-            # CPU信息
-            local cpu_usage=$(echo "$server_info" | jq -r '.cpu.usage' 2>/dev/null || echo "N/A")
-            local cpu_sysusage=$(echo "$server_info" | jq -r '.cpu.sysusage' 2>/dev/null || echo "N/A")
-            local cpu_idle=$(echo "$server_info" | jq -r '.cpu.idle' 2>/dev/null || echo "N/A")
-            local cpu_iowait=$(echo "$server_info" | jq -r '.cpu.iowait' 2>/dev/null || echo "N/A")
-            local cpu_avgload=$(echo "$server_info" | jq -r '.cpu.avgload' 2>/dev/null || echo "N/A")
-            local cpu_usestate=$(echo "$server_info" | jq -r '.cpu.usestate' 2>/dev/null || echo "normal")
-            
-            # 内存信息
-            local mem_total=$(echo "$server_info" | jq -r '.memory.total' 2>/dev/null || echo "N/A")
-            local mem_used=$(echo "$server_info" | jq -r '.memory.used' 2>/dev/null || echo "N/A")
-            local mem_free=$(echo "$server_info" | jq -r '.memory.free' 2>/dev/null || echo "N/A")
-            local mem_available=$(echo "$server_info" | jq -r '.memory.available' 2>/dev/null || echo "N/A")
-            local mem_usage=$(echo "$server_info" | jq -r '.memory.usage' 2>/dev/null || echo "N/A")
-            local mem_usestate=$(echo "$server_info" | jq -r '.memory.usestate' 2>/dev/null || echo "normal")
-            local swap_total=$(echo "$server_info" | jq -r '.memory.swaptotal' 2>/dev/null || echo "N/A")
-            local swap_used=$(echo "$server_info" | jq -r '.memory.swapused' 2>/dev/null || echo "N/A")
-            local swap_free=$(echo "$server_info" | jq -r '.memory.swapfree' 2>/dev/null || echo "N/A")
-            local swap_usage=$(echo "$server_info" | jq -r '.memory.swapusage' 2>/dev/null || echo "N/A")
-            local swap_usestate=$(echo "$server_info" | jq -r '.memory.swapusestate' 2>/dev/null || echo "normal")
-            
-            # 结果信息
-            local all_count=$(echo "$server_info" | jq -r '.result.all_count' 2>/dev/null || echo "N/A")
-            local normal_count=$(echo "$server_info" | jq -r '.result.normal_count' 2>/dev/null || echo "N/A")
-            local warn_count=$(echo "$server_info" | jq -r '.result.warn_count' 2>/dev/null || echo "N/A")
-            local serious_count=$(echo "$server_info" | jq -r '.result.serious_count' 2>/dev/null || echo "N/A")
-            local description=$(echo "$server_info" | jq -r '.result.description' 2>/dev/null || echo "N/A")
-            
-            cat >> "$txt_report" <<EOF
-
-[服务器: $alias ($ip)]
-所属组: $group_tags
-巡检时间: $time
---------------------------------------------------
-系统信息:
-  主机名: $hostname
-  IP地址: $hostip
-  操作系统: $os
-  系统启动时间: $uptimesince
-  运行时长: $uptimeduration
-
-资源信息:
-  CPU信息:
-    使用率: $cpu_usage% [${cpu_usestate}]
-    系统使用率: $cpu_sysusage%
-    空闲率: $cpu_idle%
-    IO等待: $cpu_iowait%
-    平均负载: $cpu_avgload
-  
-  内存信息:
-    总内存: ${mem_total}MB
-    已用内存: ${mem_used}MB
-    空闲内存: ${mem_free}MB
-    可用内存: ${mem_available}MB
-    使用率: $mem_usage% [${mem_usestate}]
-    交换空间: ${swap_total}MB / 已用: ${swap_used}MB / 空闲: ${swap_free}MB
-
-  磁盘信息:
-EOF
-            
-            local disk_count=$(echo "$server_info" | jq -r '.disk | length' 2>/dev/null || echo 0)
-            if [[ $disk_count -gt 0 ]]; then
-                for ((j=0; j<disk_count; j++)); do
-                    local mounted=$(echo "$server_info" | jq -r ".disk[$j].mounted" 2>/dev/null || echo "N/A")
-                    local filesystem=$(echo "$server_info" | jq -r ".disk[$j].filesystem" 2>/dev/null || echo "N/A")
-                    local total=$(echo "$server_info" | jq -r ".disk[$j].total" 2>/dev/null || echo "N/A")
-                    local used=$(echo "$server_info" | jq -r ".disk[$j].used" 2>/dev/null || echo "N/A")
-                    local available=$(echo "$server_info" | jq -r ".disk[$j].available" 2>/dev/null || echo "N/A")
-                    local usage=$(echo "$server_info" | jq -r ".disk[$j].usage" 2>/dev/null || echo "N/A")
-                    local usestate=$(echo "$server_info" | jq -r ".disk[$j].usestate" 2>/dev/null || echo "normal")
-                    
-                    cat >> "$txt_report" <<EOF
-    - $mounted ($filesystem): 总大小: $total, 已用: $used, 可用: $available, 使用率: $usage% [${usestate}]
-EOF
-                done
-            else
-                cat >> "$txt_report" <<EOF
-    无磁盘信息
-EOF
-            fi
-            
-            cat >> "$txt_report" <<EOF
-
-应用状态:
-EOF
-            
-            local apps_count=$(echo "$server_info" | jq -r '.apps | length' 2>/dev/null || echo 0)
-            if [[ $apps_count -gt 0 ]]; then
-                for ((j=0; j<apps_count; j++)); do
-                    local app_name=$(echo "$server_info" | jq -r ".apps[$j].name" 2>/dev/null || echo "N/A")
-                    local app_type=$(echo "$server_info" | jq -r ".apps[$j].type" 2>/dev/null || echo "N/A")
-                    local app_user=$(echo "$server_info" | jq -r ".apps[$j].user" 2>/dev/null || echo "N/A")
-                    local app_pid=$(echo "$server_info" | jq -r ".apps[$j].pid" 2>/dev/null || echo "N/A")
-                    local app_state=$(echo "$server_info" | jq -r ".apps[$j].state" 2>/dev/null || echo "N/A")
-                    local app_cpuusage=$(echo "$server_info" | jq -r ".apps[$j].cpuusage" 2>/dev/null || echo "N/A")
-                    local app_memusage=$(echo "$server_info" | jq -r ".apps[$j].memusage" 2>/dev/null || echo "N/A")
-                    local app_runtime=$(echo "$server_info" | jq -r ".apps[$j].runtime" 2>/dev/null || echo "N/A")
-                    
-                    cat >> "$txt_report" <<EOF
-  - $app_name ($app_type): 用户: $app_user, 进程ID: $app_pid, 状态: $app_state, CPU: ${app_cpuusage}${app_cpuusage:+%}, 内存: ${app_memusage}${app_memusage:+%}, 运行时长: $app_runtime
-EOF
-                done
-            else
-                cat >> "$txt_report" <<EOF
-  无应用信息
-EOF
-            fi
-            
-            cat >> "$txt_report" <<EOF
-
-Docker容器状态:
-EOF
-            
-            local dockers_count=$(echo "$server_info" | jq -r '.dockers | length' 2>/dev/null || echo 0)
-            if [[ $dockers_count -gt 0 ]]; then
-                for ((j=0; j<dockers_count; j++)); do
-                    local docker_name=$(echo "$server_info" | jq -r ".dockers[$j].name" 2>/dev/null || echo "N/A")
-                    local docker_id=$(echo "$server_info" | jq -r ".dockers[$j].id" 2>/dev/null || echo "N/A")
-                    local docker_state=$(echo "$server_info" | jq -r ".dockers[$j].state" 2>/dev/null || echo "N/A")
-                    local docker_status=$(echo "$server_info" | jq -r ".dockers[$j].status" 2>/dev/null || echo "N/A")
-                    
-                    cat >> "$txt_report" <<EOF
-  - $docker_name: 容器ID: $docker_id, 状态: $docker_state, 详细状态: $docker_status
-EOF
-                done
-            else
-                cat >> "$txt_report" <<EOF
-  无容器信息
-EOF
-            fi
-            
-            cat >> "$txt_report" <<EOF
-
-巡检结果:
-  总检查项: $all_count
-  正常: $normal_count
-  警告: $warn_count
-  严重: $serious_count
-  状态描述: $description
-
-EOF
-        fi
-    done
     
-    echo -e "${GREEN}TXT 报告生成: $txt_report${NC}"
-    echo "INFO: TXT 报告生成: $txt_report" >> "$LOG_FILE"
+    "$JQ_PATH" -r '.[] | 
+        "\n服务器: \(.hostname // .hostip) (\(.hostip))\n" +
+        "----------------------------------------\n" +
+        "系统: \(.os // "N/A")\n" +
+        "运行时间: \(.uptimeduration // "N/A")\n" +
+        "CPU使用率: \(.cpu.usage // "N/A")% (状态: \(.cpu.usestate // "normal"))\n" +
+        "内存使用率: \(.memory.usage // "N/A")% (状态: \(.memory.usestate // "normal"))\n" +
+        "\n磁盘使用:\n" +
+        (if .disk then ([ .disk[] | "  \(.mounted): \(.usage)% (状态: \(.usestate // "normal"))\n" ] | join("")) else "" end) +
+        "\n应用状态:\n" +
+        (if .apps then ([ .apps[] | "  \(.name): \(.state)\n" ] | join("")) else "  无\n" end) +
+        "\nDocker状态:\n" +
+        (if .dockers then ([ .dockers[] | "  \(.name): \(.state)\n" ] | join("")) else "  无\n" end)
+    ' "$json_file" >> "$txt_file"
+    
+    log_info "TXT report: $txt_file"
 }
 
-# 生成报告
-generate_reports() {
-    local json_report="$OUTPUT_DIR/patrol_report_$(date +%Y%m%d_%H%M%S).json"
-    
-    echo "{" > "$json_report"
-    echo "  \"timestamp\": \"$(date '+%Y-%m-%dT%H:%M:%S')\"," >> "$json_report"
-    echo "  \"servers\": [" >> "$json_report"
-    
-    local first=true
-    for server_info in "${PATROL_SERVERS[@]}"; do
-        read -r alias ip port user key password group_tags <<< "$server_info"
-        local result_file="$TEMP_DIR/${alias}_result.json"
-        
-        if [[ -f "$result_file" ]]; then
-            if [[ "$first" == true ]]; then
-                first=false
-            else
-                echo "  ," >> "$json_report"
-            fi
-            
-            echo "    {" >> "$json_report"
-            echo "      \"alias\": \"$alias\"," >> "$json_report"
-            echo "      \"ip\": \"$ip\"," >> "$json_report"
-            echo "      \"groups\": \"$group_tags\"," >> "$json_report"
-            echo "      \"results\": " >> "$json_report"
-            cat "$result_file" >> "$json_report"
-            echo "    }" >> "$json_report"
-        fi
-    done
-    
-    echo "  ]" >> "$json_report"
-    echo "}" >> "$json_report"
-    
-    echo -e "${GREEN}JSON 报告生成: $json_report${NC}"
-    echo "INFO: JSON 报告生成: $json_report" >> "$LOG_FILE"
-    
-    case "$OUTPUT_FORMAT" in
-        "json")
-            ;;
-        "html")
-            generate_html_report "$json_report"
-            ;;
-        "txt")
-            generate_txt_report "$json_report"
-            ;;
-        "all"|*)
-            generate_html_report "$json_report"
-            generate_txt_report "$json_report"
-            ;;
-    esac
-}
-
-# 清理历史报告文件
-cleanup_old_reports() {
-    # 保留最近7天的报告，删除更早的报告
-    find "$OUTPUT_DIR" -name "*.json" -o -name "*.html" -o -name "*.txt" | xargs -r ls -lt | awk 'NR>7 {print $9}' | xargs -r rm -f
-    echo "INFO: 清理旧报告文件" >> "$LOG_FILE"
-}
-
-# 清理临时文件
-cleanup() {
-    rm -rf "$TEMP_DIR"
-    echo "INFO: 清理临时文件" >> "$LOG_FILE"
-}
-
-# 主函数
+# ============ 主函数 ============
 main() {
-    parse_args "$@"
-    echo "INFO: 参数解析完成" >> "$LOG_FILE"
+    log_info "========== patrol started =========="
     
-    read_servers
-    echo "INFO: 服务器配置读取完成" >> "$LOG_FILE"
+    parse_servers
+    parse_groups
+    parse_checks
     
-    read_groups
-    echo "INFO: 检查组配置读取完成" >> "$LOG_FILE"
+    [ ${#SERVERS[@]} -eq 0 ] && { log_error "no servers loaded"; exit 1; }
     
-    read_checks
-    echo "INFO: 检查项配置读取完成" >> "$LOG_FILE"
+    local temp_dir=$(mktemp -d)
+    log_info "temp dir: $temp_dir"
     
-    mkdir -p "$OUTPUT_DIR"
-    echo "INFO: 输出目录准备完成" >> "$LOG_FILE"
+    for alias in "${SERVERS[@]}"; do
+        json=$(collect_server "$alias" "${SERVER_IP[$alias]}" "${SERVER_PORT[$alias]}" "${SERVER_USER[$alias]}" "${SERVER_KEY[$alias]}" "${SERVER_PASSWORD[$alias]}" "${SERVER_GROUP[$alias]}")
+        echo "$json" > "$temp_dir/${alias}.json"
+    done
     
-    run_parallel_checks
-    echo "INFO: 检查执行完成" >> "$LOG_FILE"
+    local timestamp=$(date '+%Y%m%d_%H%M%S')
+    local merged_file="$OUTPUT_DIR/report_${timestamp}.json"
     
-    generate_reports
-    echo "INFO: 报告生成完成" >> "$LOG_FILE"
+    "$JQ_PATH" -s '.' "$temp_dir"/*.json > "$merged_file" 2>/dev/null || echo "[]" > "$merged_file"
     
-    # 清理旧报告文件
-    cleanup_old_reports
+    # 直接使用合并后的 JSON 生成报告（阈值已在远端处理）
+    generate_html_report "$merged_file"
+    generate_txt_report "$merged_file"
     
-    cleanup
-    echo "INFO: 清理完成" >> "$LOG_FILE"
+    # 生成 reports.json 文件，用于趋势分析
+    local reports_file="$OUTPUT_DIR/reports.json"
     
-    echo -e "${GREEN}巡检完成！${NC}"
-    echo "INFO: 巡检完成" >> "$LOG_FILE"
+    # 如果 reports.json 不存在，创建一个空数组
+    if [ ! -f "$reports_file" ]; then
+        echo "[]" > "$reports_file"
+    fi
+    
+    # 读取现有的 reports.json 文件
+    local existing_reports=$(cat "$reports_file")
+    
+    # 创建新的报告条目
+    local new_report=$("$JQ_PATH" -n --arg date "$(date '+%Y-%m-%d')" --arg time "$(date '+%H:%M:%S')" --arg file "report_${timestamp}.json" '$ARGS.named')
+    
+    # 合并新报告到现有报告中
+    local updated_reports=$(echo "$existing_reports" | "$JQ_PATH" --argjson new_report "$new_report" '. + [$new_report]')
+    
+    # 保存更新后的 reports.json 文件
+    echo "$updated_reports" > "$reports_file"
+    
+    rm -rf "$temp_dir"
+    
+    log_info "========== patrol completed =========="
+    log_info "report: $merged_file"
+    log_info "HTML: ${merged_file%.json}.html"
+    log_info "TXT: ${merged_file%.json}.txt"
+    log_info "Reports: $reports_file"
 }
 
-# 执行主函数
+# 解析命令行参数
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --parallel|-p) PARALLEL="$2"; shift 2 ;;
+        --help|-h) echo "Usage: $0 [--parallel N]"; exit 0 ;;
+        *) shift ;;
+    esac
+done
+
 main "$@"
