@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patrol 系统巡检报告</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .header .date {
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .header .report-date {
+            color: #666;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+        }
+        .stat-item {
+            flex: 1;
+            text-align: center;
+            padding: 20px;
+            border: 1px solid #ddd;
+            margin: 0 10px;
+            border-radius: 4px;
+        }
+        .stat-item .value {
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stat-item .label {
+            color: #666;
+            font-size: 14px;
+        }
+        .stat-item:nth-child(1) .value {
+            color: #333;
+        }
+        .stat-item:nth-child(2) .value {
+            color: #4CAF50;
+        }
+        .stat-item:nth-child(3) .value {
+            color: #FF9800;
+        }
+        .stat-item:nth-child(4) .value {
+            color: #F44336;
+        }
+        .alerts {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .alerts h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .alert-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #FF9800;
+            border-radius: 0 4px 4px 0;
+        }
+        .alert-item .host {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .alert-item .messages {
+            font-size: 14px;
+            color: #666;
+        }
+        .host-section {
+            margin-bottom: 40px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .host-section h2 {
+            font-size: 20px;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .host-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+        .host-info-item {
+            flex: 1;
+        }
+        .host-info-item .label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .host-info-item .value {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+        }
+        .status-cards {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .status-card {
+            flex: 1;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 0 10px;
+        }
+        .status-card h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .status-item {
+            margin-bottom: 10px;
+        }
+        .status-item .label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .status-item .value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        .progress-bar .progress {
+            height: 100%;
+            border-radius: 4px;
+        }
+        .progress-green {
+            background-color: #4CAF50;
+        }
+        .progress-yellow {
+            background-color: #FF9800;
+        }
+        .progress-red {
+            background-color: #F44336;
+        }
+        .service-list {
+            margin-bottom: 20px;
+        }
+        .service-list h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .service-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .service-table th,
+        .service-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .service-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        .status-running {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .status-stopped {
+            color: #F44336;
+            font-weight: bold;
+        }
+        .docker-list {
+            margin-bottom: 20px;
+        }
+        .docker-list h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .docker-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .docker-table th,
+        .docker-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .docker-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #1976D2;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="index.html" class="back-link">← 返回报告列表</a>
+        
+        <div class="header">
+            <h1>Patrol 系统巡检报告</h1>
+            <div class="date" id="report-time">2026/04/16 12:00:00</div>
+            <div class="report-date" id="report-date">巡检报告日期: 2026年04月16日</div>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="value" id="total-checks">0</div>
+                <div class="label">巡检总量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="normal-checks">0</div>
+                <div class="label">正常数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="warning-checks">0</div>
+                <div class="label">告警数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="error-checks">0</div>
+                <div class="label">严重告警数量</div>
+            </div>
+        </div>
+        
+        <div class="alerts">
+            <h2>告警信息</h2>
+            <div id="alert-list">
+                <p>暂无告警信息</p>
+            </div>
+        </div>
+        
+        <div id="hosts-section">
+            <!-- 主机信息将通过JavaScript动态添加 -->
+        </div>
+    </div>
+    <script src="js/main.js"></script>
+    <script>
+        // 展开/折叠详细信息
+        function toggleDetail(btn, id) {
+            const row = document.getElementById(id);
+            if (row.style.display === 'none') {
+                row.style.display = '';
+                btn.textContent = '收起';
+            } else {
+                row.style.display = 'none';
+                btn.textContent = '展开';
+            }
+        }
+
+        // 加载报告数据
+        function loadReport() {
+            // 从URL获取报告文件名
+            const urlParams = new URLSearchParams(window.location.search);
+            const reportFile = urlParams.get('file');
+            
+            if (!reportFile) {
+                document.getElementById('alert-list').innerHTML = '<p>请选择要查看的报告</p>';
+                return;
+            }
+            
+            // 添加时间戳参数，避免缓存
+            const timestamp = new Date().getTime();
+            fetch('./data/' + reportFile + '?t=' + timestamp)
+                .then(response => response.json())
+                .then(data => {
+                    renderReport(data);
+                })
+                .catch(error => {
+                    console.error('加载报告失败:', error);
+                    document.getElementById('alert-list').innerHTML = '<p>加载报告失败，请重试</p>';
+                });
+        }
+        
+        // 渲染报告
+        function renderReport(data) {
+            // 更新报告时间
+            const now = new Date();
+            const reportTime = now.toLocaleString('zh-CN');
+            document.getElementById('report-time').textContent = reportTime;
+            document.getElementById('report-date').textContent = '巡检报告日期: ' + now.toLocaleDateString('zh-CN');
+            
+            // 统计信息
+            let totalChecks = 0;
+            let normalChecks = 0;
+            let warningChecks = 0;
+            let errorChecks = 0;
+            
+            // 告警信息
+            const alertList = [];
+            
+            // 处理每个服务器的数据
+            if (Array.isArray(data)) {
+                data.forEach(server => {
+                    if (server.error) {
+                        // 处理错误情况
+                        alertList.push({
+                            host: server.alias + ' (' + server.ip + ')',        
+                            message: `【错误】${server.message}`
+                        });
+                        return;
+                    }
+
+                    // 计算检查项数量
+                    if (server.cpu) {
+                        totalChecks++;
+                        if (server.cpu.usestate === 'normal') normalChecks++;
+                        else if (server.cpu.usestate === 'warn') warningChecks++;
+                        else errorChecks++;
+
+                        if (server.cpu.usestate !== 'normal') {
+                            alertList.push({
+                                host: server.hostname + ' (' + server.hostip + ')',        
+                                message: `【${server.cpu.usestate === 'warn' ? '告警' : '严重'}】CPU 状态异常 - 使用率: ${server.cpu.usage}%, 状态: ${server.cpu.usestate}`
+                            });
+                        }
+                    }
+
+                    if (server.memory) {
+                        totalChecks++;
+                        if (server.memory.usestate === 'normal') normalChecks++;
+                        else if (server.memory.usestate === 'warn') warningChecks++;
+                        else errorChecks++;
+
+                        if (server.memory.usestate !== 'normal') {
+                            alertList.push({
+                                host: server.hostname + ' (' + server.hostip + ')',        
+                                message: `【${server.memory.usestate === 'warn' ? '告警' : '严重'}】内存 状态异常 - 使用率: ${server.memory.usage}%, 状态: ${server.memory.usestate}`
+                            });
+                        }
+                    }
+
+                    if (server.disk && Array.isArray(server.disk)) {
+                        server.disk.forEach(disk => {
+                            totalChecks++;
+                            if (disk.usestate === 'normal') normalChecks++;
+                            else if (disk.usestate === 'warn') warningChecks++;
+                            else errorChecks++;
+
+                            if (disk.usestate !== 'normal') {
+                                alertList.push({
+                                    host: server.hostname + ' (' + server.hostip + ')',        
+                                    message: `【${disk.usestate === 'warn' ? '告警' : '严重'}】磁盘 状态异常 - 挂载点: ${disk.mounted}, 使用率: ${disk.usage}%, 状态: ${disk.usestate}`
+                                });
+                            }
+                        });
+                    }
+
+                    if (server.apps && Array.isArray(server.apps)) {
+                        server.apps.forEach(app => {
+                            totalChecks++;
+                            if (app.state === 'running') normalChecks++;
+                            else if (app.state === 'warn') warningChecks++;
+                            else errorChecks++;
+
+                            if (app.state !== 'running') {
+                                alertList.push({
+                                    host: server.hostname + ' (' + server.hostip + ')',        
+                                    message: `【${app.state === 'warn' ? '告警' : '严重'}】应用状态异常 - ${app.name}: ${app.state}`
+                                });
+                            }
+                        });
+                    }
+
+                    if (server.dockers && Array.isArray(server.dockers)) {
+                        server.dockers.forEach(docker => {
+                            totalChecks++;
+                            if (docker.state === 'running' || docker.state === 'exited') normalChecks++;
+                            else if (docker.state === 'warn') warningChecks++;
+                            else errorChecks++;
+
+                            if (docker.state !== 'running' && docker.state !== 'exited') {
+                                alertList.push({
+                                    host: server.hostname + ' (' + server.hostip + ')',        
+                                    message: `【${docker.state === 'warn' ? '告警' : '严重'}】Docker 状态异常 - ${docker.name}: ${docker.state}`
+                                });
+                            }
+                        });
+                    }
+                });
+            }
+            
+            // 更新统计信息
+            document.getElementById('total-checks').textContent = totalChecks;
+            document.getElementById('normal-checks').textContent = normalChecks;
+            document.getElementById('warning-checks').textContent = warningChecks;
+            document.getElementById('error-checks').textContent = errorChecks;
+            
+            // 渲染告警信息
+            const alertListElement = document.getElementById('alert-list');
+            if (alertList.length > 0) {
+                // 按主机分组告警信息
+                const alertsByHost = {};
+                alertList.forEach(alert => {
+                    if (!alertsByHost[alert.host]) {
+                        alertsByHost[alert.host] = [];
+                    }
+                    alertsByHost[alert.host].push(alert.message);
+                });
+                
+                let alertHtml = '';
+                Object.keys(alertsByHost).forEach(host => {
+                    alertHtml += `
+                        <div class="alert-item">
+                            <div class="host">【${host}】:</div>
+                            <div class="messages">${alertsByHost[host].join(' | ')}</div>
+                        </div>
+                    `;
+                });
+                alertListElement.innerHTML = alertHtml;
+            } else {
+                alertListElement.innerHTML = '<p>暂无告警信息</p>';
+            }
+            
+            // 渲染主机信息
+            const hostsSection = document.getElementById('hosts-section');
+            let hostsHtml = '';
+            
+            if (Array.isArray(data)) {
+                data.forEach(server => {
+                    if (server.error) {
+                        hostsHtml += `
+                            <div class="host-section">
+                                <h2>主机: ${server.alias} (${server.ip})</h2>
+                                <div class="alert-item">
+                                    <div class="host">错误信息</div>
+                                    <div class="messages">${server.message}</div>
+                                </div>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    let cpuUsage = server.cpu ? server.cpu.usage : 'N/A';
+                    let cpuState = server.cpu ? server.cpu.usestate : 'normal';
+                    let memUsage = server.memory ? server.memory.usage : 'N/A';
+                    let memState = server.memory ? server.memory.usestate : 'normal';
+                    let uptime = server.uptimeduration || 'N/A';
+                    let os = server.os || 'N/A';
+
+                    hostsHtml += `
+                        <div class="host-section">
+                            <h2>主机: ${server.hostname} (${server.hostip})</h2>
+                            
+                            <div class="host-info">
+                                <div class="host-info-item">
+                                    <div class="label">运行时间</div>
+                                    <div class="value">${uptime}</div>
+                                </div>
+                                <div class="host-info-item">
+                                    <div class="label">操作系统</div>
+                                    <div class="value">${os}</div>
+                                </div>
+                                <div class="host-info-item">
+                                    <div class="label">检查时间</div>
+                                    <div class="value">${server.time || 'N/A'}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="status-cards">
+                                <div class="status-card">
+                                    <h3>CPU状态</h3>
+                                    <div class="status-item">
+                                        <div class="label">使用率</div>
+                                        <div class="value">${cpuUsage}%</div>
+                                        <div class="progress-bar">
+                                            <div class="progress progress-${cpuState === 'normal' ? 'green' : cpuState === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(cpuUsage) || 0}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="status-item">
+                                        <div class="label">平均负载</div>
+                                        <div class="value">${server.cpu ? server.cpu.avgload : 'N/A'}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="status-card">
+                                    <h3>内存状态</h3>
+                                    <div class="status-item">
+                                        <div class="label">使用率</div>
+                                        <div class="value">${server.memory ? (server.memory.usage_text || memUsage + '%') : 'N/A'}</div>
+                                        <div class="progress-bar">
+                                            <div class="progress progress-${memState === 'normal' ? 'green' : memState === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(memUsage) || 0}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="status-item">
+                                        <div class="label">Swap使用率</div>
+                                        <div class="value">${server.memory ? (server.memory.swapusage_text || server.memory.swapusage + '%') : 'N/A'}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="status-card">
+                                    <h3>磁盘使用状态</h3>
+                                    ${server.disk && Array.isArray(server.disk) ? server.disk.map(disk => `
+                                        <div class="status-item">
+                                            <div class="label">${disk.mounted}</div>
+                                            <div class="value">${disk.usage}% (${disk.used}/${disk.total})</div>
+                                            <div class="progress-bar">
+                                                <div class="progress progress-${disk.usestate === 'normal' ? 'green' : disk.usestate === 'warn' ? 'yellow' : 'red'}" style="width: ${parseInt(disk.usage) || 0}%"></div>
+                                            </div>
+                                        </div>
+                                    `).join('') : '<div class="status-item"><div class="label">磁盘</div><div class="value">N/A</div></div>'}
+                                </div>
+                            </div>
+                            
+                            ${server.result ? `
+                                <div class="status-card">
+                                    <h3>巡检结果</h3>
+                                    <div class="status-item">
+                                        <div class="value">总计: ${server.result.all_count || 0}, 正常: ${server.result.normal_count || 0}, 警告: ${server.result.warn_count || 0}, 严重: ${server.result.serious_count || 0}</div>
+                                    </div>
+                                    ${server.result.description && server.result.description !== "【正常】" ? `
+                                        <div class="status-item">
+                                            <div class="value">${server.result.description}</div>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            ` : ''}
+                            
+                            ${server.apps && Array.isArray(server.apps) ? `
+                                <div class="service-list">
+                                    <h3>应用状态</h3>
+                                    <table class="service-table">
+                                        <thead>
+                                            <tr>
+                                                <th>进程名</th>
+                                                <th>服务名称</th>
+                                                <th>进程ID</th>
+                                                <th>进程序态</th>
+                                                <th>运行时长</th>
+                                                <th>CPU使用率</th>
+                                                <th>内存使用率</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${server.apps.map(app => `
+                                                <tr>
+                                                    <td>${app.name}</td>
+                                                    <td>${app.name}</td>
+                                                    <td>${app.pid || 'N/A'}</td>
+                                                    <td class="status-${app.state}">${app.state}</td>
+                                                    <td>${app.runtime || 'unknown'}</td>
+                                                    <td>${app.cpuusage || '0.0'}%</td>
+                                                    <td>${app.memusage || '0.0'}%</td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ` : ''}
+                            
+                            ${server.dockers && Array.isArray(server.dockers) ? `
+                                <div class="docker-list">
+                                    <h3>Docker容器状态</h3>
+                                    <table class="docker-table">
+                                        <thead>
+                                            <tr>
+                                                <th>容器名称</th>
+                                                <th>服务名称</th>
+                                                <th>容器ID</th>
+                                                <th>状态</th>
+                                                <th>运行时长</th>
+                                                <th>CPU使用率</th>
+                                                <th>内存使用率</th>
+                                                <th>内存使用量</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${server.dockers.map(docker => `
+                                                <tr>
+                                                    <td>${docker.name}</td>
+                                                    <td>${docker.name}</td>
+                                                    <td>${docker.id || 'N/A'}</td>
+                                                    <td class="status-${docker.state}">${docker.status || docker.state}</td>
+                                                    <td>${docker.runtime || 'unknown'}</td>
+                                                    <td>${docker.cpuusage || '0.0'}%</td>
+                                                    <td>${docker.memusage || '0.0'}%</td>
+                                                    <td>${docker.memused || 'N/A'}</td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+            }
+            
+            hostsSection.innerHTML = hostsHtml;
+        }
+        
+        // 页面加载完成后加载报告数据
+        window.onload = loadReport;
+    </script>
+</body>
+</html>
