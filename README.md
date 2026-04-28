@@ -60,7 +60,6 @@ patrol/
     ├── report.html             # 概览报告页面
     ├── report_detailed.html    # 详细报告页面
     ├── trend.html              # 趋势分析页面
-    ├── config.html             # 配置管理页面
     ├── css/                    # 样式文件
     ├── js/                     # JavaScript 文件
     ├── data/                   # 报告数据目录
@@ -137,15 +136,19 @@ patrol/
 
 ## 使用
 
-### 正常运行
+### 运行模式
 
 ```bash
+# 默认配置文件模式
 ./patrol.sh
-```
 
-### 演示模式
+# 自定义巡检配置模式（支持 conf/ 前缀省略）
+./patrol.sh --servers=servers_local.conf --groups=check_groups_solo.conf --checks=checks_solo.conf
 
-```bash
+# 或者使用完整路径
+./patrol.sh --servers=conf/servers_local.conf --groups=conf/check_groups_solo.conf --checks=conf/checks_solo.conf
+
+# Demo 模式（使用预设数据快速生成报告）
 ./patrol.sh --demo
 ```
 
@@ -158,24 +161,36 @@ patrol/
 ### 自定义配置文件
 
 ```bash
-# 使用自定义服务器配置文件
-./patrol.sh --servers=conf/servers_test.conf
+# 使用自定义服务器配置文件（支持省略 conf/ 前缀）
+./patrol.sh --servers=servers_test.conf
 
 # 使用自定义分组配置文件
-./patrol.sh --groups=conf/check_groups_test.conf
+./patrol.sh --groups=check_groups_test.conf
 
 # 使用自定义检查项配置文件
-./patrol.sh --checks=conf/checks_test.conf
+./patrol.sh --checks=checks_test.conf
 
 # 同时使用多个自定义配置文件
-./patrol.sh --servers=conf/servers_test.conf --groups=conf/check_groups_test.conf --checks=conf/checks_test.conf
+./patrol.sh --servers=servers_test.conf --groups=check_groups_test.conf --checks=checks_test.conf
 ```
 
 ### 运行 Web 服务
 
 ```bash
-# 进入 web 目录并启动 HTTP 服务器
+# 方式一：使用 Python 内置 HTTP 服务器
 cd web && python -m http.server 8000
+
+# 方式二：使用 Nginx 配置
+# 在 Nginx 配置文件中添加：
+# server {
+#     listen 8000;
+#     server_name localhost;
+#     root /path/to/patrol/web;
+#     index index.html;
+#     location / {
+#         try_files $uri $uri/ =404;
+#     }
+# }
 
 # 然后在浏览器中访问
 # http://localhost:8000/index.html

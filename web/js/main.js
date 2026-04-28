@@ -14,53 +14,26 @@ window.onload = function() {
 
 // 加载报告列表
 function loadReportList() {
-    // 尝试加载真实的报告文件列表
-    fetch('./data/')
+    fetch('./data/reports.json?t=' + new Date().getTime())
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to load report list');
+                throw new Error('Failed to load reports.json');
             }
-            return response.text();
+            return response.json();
         })
-        .then(html => {
-            // 解析HTML获取报告文件列表
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const files = doc.querySelectorAll('a[href$=".json"]');
-            
-            // 使用Promise.all来处理异步请求
+        .then(reportList => {
             const reportPromises = [];
             
-            files.forEach(file => {
-                const filename = file.getAttribute('href');
-                const id = filename.replace('.json', '');
-                const parts = id.split('_');
-                if (parts.length >= 3) {
-                    const date = parts[1];
-                    const time = parts[2];
-                    const formattedDate = `${date.substring(0,4)}-${date.substring(4,6)}-${date.substring(6,8)}`;
-                    const formattedTime = `${time.substring(0,2)}:${time.substring(2,4)}:${time.substring(4,6)}`;
-                    
-                    // 跳过无效的文件名
-                    if (filename.includes('')) {
-                        return Promise.resolve({
-                            id: id,
-                            date: formattedDate,
-                            time: formattedTime,
-                            serverCount: 0,
-                            checkCount: 0,
-                            passCount: 0,
-                            failCount: 0
-                        });
-                    }
-                    
-                    // 创建一个Promise来加载报告文件
-                    const reportPromise = fetch(`./data/${filename}?t=${new Date().getTime()}`)
-                        .then(response => response.json())
-                        .then(data => {
-                            let passCount = 0;
-                            let failCount = 0;
-                            let checkCount = 0;
+            reportList.forEach(item => {
+                const id = item.file.replace('.json', '');
+                const formattedDate = item.date;
+                const formattedTime = item.time;
+                const reportPromise = fetch(`./data/${item.file}?t=${new Date().getTime()}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        let passCount = 0;
+                        let failCount = 0;
+                        let checkCount = 0;
                             
                             if (Array.isArray(data)) {
                                 // 新格式：数据是数组，每个元素是服务器信息
@@ -141,18 +114,17 @@ function loadReportList() {
                         });
                     
                     reportPromises.push(reportPromise);
-                }
             });
             
             // 等待所有报告加载完成
             Promise.all(reportPromises)
-                .then(reportList => {
+                .then(loadedReports => {
                     // 按时间降序排序
-                    reportList.sort((a, b) => {
+                    loadedReports.sort((a, b) => {
                         return new Date(`${b.date} ${b.time}`) - new Date(`${a.date} ${a.time}`);
                     });
                     
-                    reports = reportList;
+                    reports = loadedReports;
                     renderReportList();
                 })
                 .catch(error => {

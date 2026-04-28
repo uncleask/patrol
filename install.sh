@@ -235,12 +235,89 @@ EOF
     fi
     
     # 创建默认演示数据
-    local default_out="$SCRIPT_DIR/web/demo_data/default.out"
-    if [ ! -f "$default_out" ]; then
-        echo "这是默认输出" > "$default_out"
-        log_info "创建默认演示数据: $default_out"
+    local demo_json="$SCRIPT_DIR/web/demo_data/demo_patrol.json"
+    if [ ! -f "$demo_json" ]; then
+        cat > "$demo_json" <<'EOF'
+[
+  {
+    "time": "2026-04-29 01:22:23",
+    "hostip": "10.61.42.193",
+    "hostname": "demo-server",
+    "os": "Ubuntu 24.04.3 LTS",
+    "uptimesince": "2026-04-27 00:18:14",
+    "uptimeduration": "up 2 days, 1:04, 0 user, load average: 0.00, 0.02, 0.00",
+    "cpu": {
+      "usage": "5.00",
+      "sysusage": "0.0",
+      "idle": "95.0",
+      "iowait": "0.0",
+      "avgload": "0.00, 0.02, 0.00",
+      "usestate": "normal"
+    },
+    "memory": {
+      "total": "3923",
+      "used": "1195",
+      "free": "761",
+      "available": "2728",
+      "usage": "30.46",
+      "usage_text": "30.46% (1195 MB/3923 MB)",
+      "usestate": "normal",
+      "swaptotal": "0",
+      "swapused": "0",
+      "swapfree": "0",
+      "swapusage": "0",
+      "swapusage_text": "0% (0 MB/0 MB)"
+    },
+    "disk": [
+      {
+        "name": "disk_root",
+        "mounted": "/",
+        "filesystem": "/dev/vda",
+        "total": "40G",
+        "used": "28G",
+        "available": "13G",
+        "usage": "70",
+        "usestate": "normal"
+      }
+    ],
+    "apps": [
+      {
+        "name": "nginx",
+        "type": "vhost",
+        "user": "root",
+        "pid": "1234",
+        "cpuusage": "0.1",
+        "memusage": "0.5",
+        "runtime": "2天1小时",
+        "runtime_sec": "176639",
+        "state": "running"
+      },
+      {
+        "name": "mysql",
+        "type": "vhost",
+        "user": "mysql",
+        "pid": "5678",
+        "cpuusage": "0.3",
+        "memusage": "2.1",
+        "runtime": "2天1小时",
+        "runtime_sec": "176642",
+        "state": "running"
+      }
+    ],
+    "dockers": [],
+    "result": {
+      "all_count": 4,
+      "normal_count": 4,
+      "warn_count": 0,
+      "serious_count": 0,
+      "description": "【正常】"
+    }
+  }
+]
+EOF
+        log_info "创建演示数据文件: $demo_json"
     else
-        log_info "默认演示数据已存在: $default_out"
+        log_info "演示数据文件已存在: $demo_json"
     fi
 }
 

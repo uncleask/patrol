@@ -28,20 +28,53 @@ CHECKS_FILE="$CONF_DIR/checks.conf"
 # 默认并发数
 PARALLEL=4
 
+# Demo模式
+DEMO_MODE=false
+DEMO_DATA_FILE="$SCRIPT_DIR/web/demo_data/demo_patrol.json"
+
 log_info() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1" >&2; }
 log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1" >&2; }
+
+# 解析配置文件路径（支持相对路径和 conf 目录自动补全）
+resolve_config_path() {
+    local config_file="$1"
+    
+    # 如果是绝对路径，直接返回
+    if [[ "$config_file" = /* ]]; then
+        echo "$config_file"
+        return
+    fi
+    
+    # 如果文件存在于当前路径，使用当前路径
+    if [ -f "$SCRIPT_DIR/$config_file" ]; then
+        echo "$SCRIPT_DIR/$config_file"
+        return
+    fi
+    
+    # 如果文件存在于 conf 目录，使用 conf 目录
+    if [ -f "$CONF_DIR/$config_file" ]; then
+        echo "$CONF_DIR/$config_file"
+        return
+    fi
+    
+    # 默认返回原始路径（后续会报错文件不存在）
+    echo "$SCRIPT_DIR/$config_file"
+}
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
     case $1 in
         --servers=*)
-            SERVERS_FILE="${1#*=}"
+            SERVERS_FILE=$(resolve_config_path "${1#*=}")
             ;;
         --groups=*)
-            GROUPS_FILE="${1#*=}"
+            GROUPS_FILE=$(resolve_config_path "${1#*=}")
             ;;
         --checks=*)
-            CHECKS_FILE="${1#*=}"
+            CHECKS_FILE=$(resolve_config_path "${1#*=}")
+            ;;
+        --demo)
+            DEMO_MODE=true
             ;;
         *)
             log_error "Unknown parameter: $1"
@@ -679,6 +712,41 @@ EOF
 # ============ 主函数 ============
 main() {
     log_info "========== patrol started =========="
+    
+    if [ "$DEMO_MODE" = true ]; then
+        log_info "Running in DEMO mode"
+        
+        if [ ! -f "$DEMO_DATA_FILE" ]; then
+            log_error "Demo data file not found: $DEMO_DATA_FILE"
+            exit 1
+        fi
+        
+        local timestamp=$(date '+%Y%m%d_%H%M%S')
+        local merged_file="$OUTPUT_DIR/report_${timestamp}.json"
+        
+        cp "$DEMO_DATA_FILE" "$merged_file"
+        log_info "Copied demo data to: $merged_file"
+        
+        generate_html_report "$merged_file"
+        generate_txt_report "$merged_file"
+        
+        local reports_file="$OUTPUT_DIR/reports.json"
+        if [ ! -f "$reports_file" ]; then
+            echo "[]" > "$reports_file"
+        fi
+        
+        local existing_reports=$(cat "$reports_file")
+        local new_report=$("$JQ_PATH" -n --arg date "$(date '+%Y-%m-%d')" --arg time "$(date '+%H:%M:%S')" --arg file "report_${timestamp}.json" '$ARGS.named')
+        local updated_reports=$(echo "$existing_reports" | "$JQ_PATH" --argjson new_report "$new_report" '. + [$new_report]')
+        echo "$updated_reports" > "$reports_file"
+        
+        log_info "========== patrol completed (demo mode) =========="
+        log_info "report: $merged_file"
+        log_info "HTML: ${merged_file%.json}.html"
+        log_info "TXT: ${merged_file%.json}.txt"
+        log_info "Reports: $reports_file"
+        return 0
+    fi
     
     parse_servers
     parse_groups

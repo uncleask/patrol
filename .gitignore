@@ -18,3 +18,5 @@ web/data
 conf/servers_local.conf
 conf/servers_passwd.conf
 conf/servers_proxy.conf
+conf/checks_solo.conf
+conf/check_groups_solo.conf
