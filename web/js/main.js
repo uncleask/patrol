@@ -539,16 +539,86 @@ function renderReportDetail(data) {
 
 // 加载趋势数据
 function loadTrendData() {
-    // 这里应该从服务器获取趋势数据，现在使用模拟数据
-    const mockTrendData = {
-        dates: ['2026-04-14', '2026-04-15', '2026-04-16'],
-        cpuUsage: [65, 72, 75],
-        memoryUsage: [70, 78, 85],
-        diskUsage: [60, 65, 70],
-        alertCount: [1, 2, 3]
-    };
+    const MAX_DAYS = 30;
     
-    renderTrendData(mockTrendData);
+    fetch('./data/reports.json?t=' + new Date().getTime())
+        .then(response => response.json())
+        .then(reportList => {
+            const today = new Date();
+            const thirtyDaysAgo = new Date(today);
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - MAX_DAYS);
+            
+            const dailyLatest = {};
+            
+            reportList.forEach(item => {
+                const fullDate = new Date(`${item.date} ${item.time}`);
+                
+                if (fullDate >= thirtyDaysAgo) {
+                    if (!dailyLatest[item.date] || 
+                        fullDate > new Date(`${dailyLatest[item.date].date} ${dailyLatest[item.date].time}`)) {
+                        dailyLatest[item.date] = item;
+                    }
+                }
+            });
+            
+            const dailyReports = Object.values(dailyLatest).sort((a, b) => {
+                return new Date(a.date) - new Date(b.date);
+            });
+            
+            const promises = dailyReports.map(item => {
+                return fetch(`./data/${item.file}?t=${new Date().getTime()}`)
+                    .then(response => response.json())
+                    .then(data => ({ date: item.date, data: data }));
+            });
+            
+            return Promise.all(promises);
+        })
+        .then(results => {
+            const trendData = {
+                dates: [],
+                cpuUsage: [],
+                memoryUsage: [],
+                diskUsage: [],
+                alertCount: []
+            };
+            
+            results.forEach(item => {
+                trendData.dates.push(item.date);
+                
+                let cpu = 0, mem = 0, disk = 0, alerts = 0, count = 0;
+                
+                if (Array.isArray(item.data)) {
+                    item.data.forEach(server => {
+                        count++;
+                        if (server.cpu && server.cpu.usage) cpu += parseFloat(server.cpu.usage);
+                        if (server.memory && server.memory.usage) mem += parseFloat(server.memory.usage);
+                        if (server.disk && server.disk.length > 0) {
+                            server.disk.forEach(d => { if (d.usage) disk = Math.max(disk, parseFloat(d.usage)); });
+                        }
+                        if (server.result) {
+                            alerts += (server.result.warn_count || 0) + (server.result.serious_count || 0);
+                        }
+                    });
+                }
+                
+                trendData.cpuUsage.push(count > 0 ? Math.round(cpu / count) : 0);
+                trendData.memoryUsage.push(count > 0 ? Math.round(mem / count) : 0);
+                trendData.diskUsage.push(disk);
+                trendData.alertCount.push(alerts);
+            });
+            
+            renderTrendData(trendData);
+        })
+        .catch(error => {
+            console.error('Failed to load trend data:', error);
+            renderTrendData({
+                dates: ['2026-04-14', '2026-04-15', '2026-04-16'],
+                cpuUsage: [65, 72, 75],
+                memoryUsage: [70, 78, 85],
+                diskUsage: [60, 65, 70],
+                alertCount: [1, 2, 3]
+            });
+        });
 }
 
 // 渲染趋势数据
