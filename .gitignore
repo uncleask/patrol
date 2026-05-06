@@ -1,5 +1,5 @@
-# Test files
-test_*.sh
+# Test files (保留 test_solo_run.sh 作为演示入口)
+# test_*.sh
 
 # SSH keys
 patrol/.ssh/
@@ -18,5 +18,3 @@ web/data
 conf/servers_local.conf
 conf/servers_passwd.conf
 conf/servers_proxy.conf
-conf/checks_solo.conf
-conf/check_groups_solo.conf
