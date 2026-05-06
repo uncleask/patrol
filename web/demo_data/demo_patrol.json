@@ -1,0 +1,81 @@
+[
+  {
+    "time": "2026-04-29 01:22:23",
+    "hostip": "10.61.42.193",
+    "hostname": "all-in-one-26-vci-96ls5",
+    "os": "Ubuntu 24.04.3 LTS",
+    "uptimesince": "2026-04-27 00:18:14",
+    "uptimeduration": "up 2 days, 1:04, 0 user, load average: 0.00, 0.02, 0.00",
+    "cpu": {
+      "usage": "5.00",
+      "sysusage": "0.0",
+      "idle": "95.0",
+      "iowait": "0.0",
+      "avgload": "0.00, 0.02, 0.00",
+      "usestate": "normal"
+    },
+    "memory": {
+      "total": "3923",
+      "used": "1195",
+      "free": "761",
+      "available": "2728",
+      "usage": "30.46",
+      "usage_text": "30.46% (1195 MB/3923 MB)",
+      "usestate": "normal",
+      "swaptotal": "0",
+      "swapused": "0",
+      "swapfree": "0",
+      "swapusage": "0",
+      "swapusage_text": "0% (0 MB/0 MB)"
+    },
+    "disk": [
+      {
+        "name": "disk_workspace",
+        "mounted": "/workspace",
+        "filesystem": "/dev/vda",
+        "total": "40G",
+        "used": "28G",
+        "available": "13G",
+        "usage": "70",
+        "usestate": "normal"
+      }
+    ],
+    "apps": [
+      {
+        "name": "sshd",
+        "type": "vhost",
+        "state": "stopped"
+      },
+      {
+        "name": "python3",
+        "type": "vhost",
+        "user": "root",
+        "pid": "820",
+        "cpuusage": "0.0",
+        "memusage": "0.7",
+        "runtime": "2天1小时",
+        "runtime_sec": "176639",
+        "state": "running"
+      },
+      {
+        "name": "supervisord",
+        "type": "vhost",
+        "user": "root",
+        "pid": "1",
+        "cpuusage": "0.0",
+        "memusage": "0.0",
+        "runtime": "2天1小时",
+        "runtime_sec": "176642",
+        "state": "running"
+      }
+    ],
+    "dockers": [],
+    "result": {
+      "all_count": 4,
+      "normal_count": 5,
+      "warn_count": 0,
+      "serious_count": 1,
+      "description": "<br/>【严重】应用 sshd 未运行<br/>"
+    }
+  }
+]

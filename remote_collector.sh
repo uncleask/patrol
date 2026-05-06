@@ -28,7 +28,11 @@ initdir=$PWD
 export TZ="Asia/Shanghai"
 
 HOST_IP=$(hostname -I | awk '{print $1}' | head -1)
-PATROL_CONFIG_FILE="host_${HOST_IP}_patrol.conf"
+if [ $# -gt 0 ]; then
+    PATROL_CONFIG_FILE="$1"
+else
+    PATROL_CONFIG_FILE="host_${HOST_IP}_patrol.conf"
+fi
 
 # 全局变量
 declare -A DISK_THRESHOLDS
