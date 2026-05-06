@@ -5,6 +5,7 @@
 Patrol 是一个基于 Shell 脚本实现的自动化系统巡检工具，用于运维场景。它通过 SSH 直连被控服务器执行检查命令，无需在被控机安装任何 Agent。
 
 ## 项目背景
+
 在生产环境中，安全管控严格，无互联网连接，不能轻易安装软件。维护人员巡检应用服务器设备依靠人工操作，既费力又价值低。为此，开发一款轻量的巡检工具，针对 Linux 服务器，能够编辑安装部署，自动巡检，输出多格式巡检结果，并提供 Web 端巡检报告查看功能。
 
 ## 功能特性
@@ -22,16 +23,19 @@ Patrol 是一个基于 Shell 脚本实现的自动化系统巡检工具，用于
 ## 系统要求
 
 ### 中心机
+
 - Bash 脚本环境
 - 依赖工具：ssh、scp（系统自带）
 - 内置 jq 工具（无需安装）
 
 ### 远程机
+
 - Bash 脚本环境
 - 依赖工具：vmstat、free、df、ps、awk（系统自带，不依赖 bc）
 - 可选：docker（用于检查 Docker 相关信息）
 
 ### 兼容系统
+
 - Redhat
 - CentOs
 - Rocky Linux
@@ -95,14 +99,12 @@ patrol/
    cp conf/checks.conf.example conf/checks.conf
    cp conf/check_groups.conf.example conf/check_groups.conf
    ```
-
 2. 编辑 `servers.conf` 配置服务器信息：
    ```
    # 格式：别名:IP:端口:用户名:私钥路径:密码（可选）:组标签`
    web01:192.168.1.10:22:root:$HOME/patrol/.autopriv/patrol_rsa:group_web
    db01:192.168.1.20:22:mysqluser:$HOME/patrol/.autopriv/patrol_rsa:mypassword:group_db
    ```
-
 3. 编辑 `checks.conf` 配置检查项：
    ```
    # 格式：检查项名称:类型:执行命令
@@ -120,7 +122,6 @@ patrol/
    # Docker 检查
    oracle_19c:docker:docker ps --filter "name=oracle"
    ```
-
 4. 编辑 `check_groups.conf` 配置检查项分组：
    ```
    # 格式：分组名:检查项1,检查项2,...
@@ -184,6 +185,7 @@ cd web && python -m http.server 8000
 ## 报告输出
 
 执行完成后，会在 `web/data/` 目录生成以下文件：
+
 - `report_YYYYMMDD_HHMMSS.html` - HTML 格式概览报告（人类可读）
 - `report_YYYYMMDD_HHMMSS.json` - JSON 格式报告（供下游系统）
 - `report_YYYYMMDD_HHMMSS.txt` - TXT 格式报告（纯文本日志）
@@ -192,6 +194,7 @@ cd web && python -m http.server 8000
 ## 趋势分析
 
 打开 `web/trend.html` 页面，可以查看系统资源使用情况的趋势图表，包括：
+
 - CPU 使用率趋势
 - 内存使用率趋势
 - 磁盘使用率趋势
@@ -205,14 +208,12 @@ cd web && python -m http.server 8000
 4. 定期清理 `web/data/` 目录，避免占用过多磁盘空间
 5. 确保远程服务器上安装了必要的命令（如 top、free、df、ps、docker 等）
 
-
 ## 问题处理
 
 - **无法连接到远程服务器**：检查网络连接、SSH 配置和服务器状态
 - **远程脚本执行失败**：检查远程服务器的工具是否安装完整
 - **报告生成失败**：检查 jq 工具是否正常工作
 - **阈值告警不准确**：调整 checks.conf 中的阈值设置
-
 
 ## 故障排查
 
@@ -224,6 +225,7 @@ cd web && python -m http.server 8000
 ## 扩展功能
 
 - **添加新检查项**：在 checks.conf 中添加新的检查项定义
-- **创建新检查组**：在 check_groups.conf 中创建新的检查组
+- **创建新检查组**：在 check\_groups.conf 中创建新的检查组
 - **添加新服务器**：在 servers.conf 中添加新的服务器信息
 - **自定义报告模板**：修改 HTML 报告模板以满足特定需求
+
