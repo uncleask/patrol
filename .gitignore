@@ -1,8 +1,9 @@
-# Test files (保留 test_solo_run.sh 作为演示入口)
-# test_*.sh
+# Test files
+test_*.sh
 
 # SSH keys
 patrol/.ssh/
+.ssh/
 
 # Log files
 logs/

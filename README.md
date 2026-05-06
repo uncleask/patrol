@@ -1,26 +1,26 @@
 # Patrol - 轻量级系统巡检工具
 
-## 项目简介
+## 一、项目简介
 
 Patrol 是一个基于 Shell 脚本实现的自动化系统巡检工具，用于运维场景。它通过 SSH 直连被控服务器执行检查命令，无需在被控机安装任何 Agent。
 
-## 项目背景
+## 二、项目背景
 
 在生产环境中，安全管控严格，无互联网连接，不能轻易安装软件。维护人员巡检应用服务器设备依靠人工操作，既费力又价值低。为此，开发一款轻量的巡检工具，针对 Linux 服务器，能够编辑安装部署，自动巡检，输出多格式巡检结果，并提供 Web 端巡检报告查看功能。
 
-## 功能特性
+## 三、功能特性
 
 - 支持多台服务器、多项检查命令的配置
 - 输出三种格式报告：HTML（人类可读）、JSON（供下游系统）、TXT（纯文本日志）
 - 提供趋势分析功能，展示系统资源使用情况的变化趋势
 - 支持应用和 Docker 容器运行时长显示
-- 跨系统兼容性，支持不同 Linux 发行版（如 Rocky Linux、Debian）
+- 跨系统兼容性，支持不同 Linux 发行版（Redhat系、Debian系、Arch Linux）
 - 提供一键安装脚本，降低使用门槛
 - 提供 --demo 模式，使用本地样本数据展示完整功能
 - 纯 Shell 实现（bash 3.2+），尽量减少外部依赖
 - 支持自定义配置文件，通过命令行参数指定
 
-## 系统要求
+## 四、系统要求
 
 ### 中心机
 
@@ -43,7 +43,7 @@ Patrol 是一个基于 Shell 脚本实现的自动化系统巡检工具，用于
 - Ubuntu
 - 其他Linux
 
-## 目录结构
+## 五、目录结构
 
 ```
 patrol/
@@ -70,7 +70,7 @@ patrol/
     └── demo_data/              # 演示数据目录
 ```
 
-## 安装
+## 六、安装
 
 1. 克隆项目到本地
 2. 进入 patrol 目录：
@@ -90,7 +90,7 @@ patrol/
    - 复制配置文件示例
    - 提示如何生成 SSH 密钥对并推送公钥
 
-## 配置
+## 七、配置
 
 1. 复制配置文件示例并修改：
    ```bash
@@ -135,7 +135,7 @@ patrol/
    group_docker:kafka,oracle_19c,opengauss,cordys-crm
    ```
 
-## 使用
+## 八、使用
 
 ### 运行模式
 
@@ -197,7 +197,7 @@ cd web && python -m http.server 8000
 # http://localhost:8000/index.html
 ```
 
-## 报告输出
+## 九、报告输出
 
 执行完成后，会在 `web/data/` 目录生成以下文件：
 
@@ -206,7 +206,7 @@ cd web && python -m http.server 8000
 - `report_YYYYMMDD_HHMMSS.txt` - TXT 格式报告（纯文本日志）
 - `reports.json` - 所有巡检报告的摘要信息（用于趋势分析）
 
-## 趋势分析
+## 十、趋势分析
 
 打开 `web/trend.html` 页面，可以查看系统资源使用情况的趋势图表，包括：
 
@@ -215,7 +215,7 @@ cd web && python -m http.server 8000
 - 磁盘使用率趋势
 - 告警数量趋势
 
-## 注意事项
+## 十一、注意事项
 
 1. 建议使用 SSH 密钥认证，避免在配置文件中存储密码
 2. 若使用密码认证，需要安装 `sshpass` 工具
@@ -223,24 +223,39 @@ cd web && python -m http.server 8000
 4. 定期清理 `web/data/` 目录，避免占用过多磁盘空间
 5. 确保远程服务器上安装了必要的命令（如 top、free、df、ps、docker 等）
 
-## 问题处理
+## 十二、问题处理
 
 - **无法连接到远程服务器**：检查网络连接、SSH 配置和服务器状态
 - **远程脚本执行失败**：检查远程服务器的工具是否安装完整
 - **报告生成失败**：检查 jq 工具是否正常工作
 - **阈值告警不准确**：调整 checks.conf 中的阈值设置
 
-## 故障排查
+## 十三、故障排查
 
 - 检查 `logs/` 目录下的日志文件
 - 验证配置文件格式是否正确（使用冒号分隔）
 - 检查远程服务器上的命令是否存在
 - 查看远程服务器的系统日志以了解可能的问题
 
-## 扩展功能
+## 十四、扩展功能
 
 - **添加新检查项**：在 checks.conf 中添加新的检查项定义
 - **创建新检查组**：在 check\_groups.conf 中创建新的检查组
 - **添加新服务器**：在 servers.conf 中添加新的服务器信息
 - **自定义报告模板**：修改 HTML 报告模板以满足特定需求
 
+<br />
+
+## 十五、Trce Solo(云端)快速体验
+### Trce Solo(云端)环境的巡检脚本
+本地linux环境也可执行该脚本，快速体验Patrol功能。
+
+```bash
+./quick_solo_run.sh
+```
+### Trce Solo(云端)巡检结果的截图
+![巡检首页](web/test_solo_pics/01-solo-index.png)
+![巡检结果](web/test_solo_pics/02-solo-result.png)
+![巡检详情](web/test_solo_pics/03-solo-detail.png)
+![结果趋势](web/test_solo_pics/04-solo-trend-res.png)
+![告警趋势](web/test_solo_pics/05-solo-trend-alarm.png)
