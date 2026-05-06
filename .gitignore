@@ -18,3 +18,6 @@ web/data
 conf/servers_local.conf
 conf/servers_passwd.conf
 conf/servers_proxy.conf
+
+# docs
+docs_prompt/
